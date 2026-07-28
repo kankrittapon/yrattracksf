@@ -1,5 +1,7 @@
 import logging
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,6 +15,66 @@ from .security import control_rate_limit, require_admin
 
 settings = get_settings()
 logging.basicConfig(level=settings.log_level)
+
+
+def _timestamp_iso(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric > 10_000_000_000:
+        numeric /= 1000
+    return datetime.fromtimestamp(numeric, UTC).isoformat()
+
+
+async def _persist_races(repository: Repository, races: list[dict[str, Any]]) -> None:
+    if not races:
+        return
+    first = races[0]
+    match_cd = str(first.get("matchCd") or "")
+    if not match_cd:
+        return
+    await repository.upsert(
+        "matches",
+        [{
+            "match_cd": match_cd,
+            "name": first.get("matchName") or match_cd,
+            "raw_metadata": {"source": "admin_sync"},
+        }],
+        "match_cd",
+    )
+    classes: dict[str, dict[str, Any]] = {}
+    normalized_races: list[dict[str, Any]] = []
+    for race in races:
+        race_cd = str(race.get("raceCd") or "")
+        if not race_cd:
+            continue
+        level_cd = str(race.get("levelCd") or "")
+        if level_cd:
+            classes[level_cd] = {
+                "level_cd": level_cd,
+                "match_cd": match_cd,
+                "name": race.get("raceName") or level_cd,
+                "logo_url": race.get("levelClassifyLogo"),
+                "raw_metadata": {"source": "admin_sync"},
+            }
+        normalized_races.append({
+            "race_cd": race_cd,
+            "match_cd": match_cd,
+            "level_cd": level_cd or None,
+            "name": race.get("raceName"),
+            "rounds": race.get("rounds"),
+            "group_name": race.get("groupName"),
+            "sailfish_status": str(race.get("status") or ""),
+            "start_at": _timestamp_iso(race.get("startTime")),
+            "end_at": _timestamp_iso(race.get("endTime")),
+            "raw_metadata": {"source": "admin_sync"},
+            "updated_at": datetime.now(UTC).isoformat(),
+        })
+    await repository.upsert("race_classes", list(classes.values()), "level_cd")
+    await repository.upsert("races", normalized_races, "race_cd")
 
 
 @asynccontextmanager
@@ -51,6 +113,7 @@ async def discover_races(principal: Principal = Depends(require_admin)):
 @app.post("/races/sync", dependencies=[Depends(control_rate_limit)])
 async def sync_races(body: RaceSyncRequest, principal: Principal = Depends(require_admin)):
     races = await app.state.sailfish.sync_races(body.match_cd)
+    await _persist_races(app.state.repository, races)
     await app.state.repository.audit(principal.user_id, "races.sync", None, body.match_cd)
     return {"items": races}
 

@@ -19,6 +19,14 @@ interface QualityEvent {
   resolved_at: string | null;
 }
 
+interface SailFishMatch {
+  matchCd: string;
+  matchName?: string;
+  matchStart?: string;
+  matchEnd?: string;
+  notFinishRaceCount?: number;
+}
+
 const titles: Record<Section, [string, string]> = {
   overview: ["Race overview", "ภาพรวมการแข่งขันและสัญญาณล่าสุด"],
   live: ["Live race", "ตำแหน่ง ลม และสมรรถนะวินาทีต่อวินาที"],
@@ -146,7 +154,11 @@ export function RaceDashboard({section}: {section: Section}) {
         </div>
       </div>
 
-      {loading ? <LoadingState/> : !race ? <EmptyState/> : (
+      {loading ? <LoadingState/> : !race ? (
+        section === "control"
+          ? <CollectorSetup onSynced={() => void load()}/>
+          : <EmptyState/>
+      ) : (
         <>
           {section === "overview" && <Overview race={race} collector={collector} wind={wind} athletes={athletes} liveCount={liveCount} teamMap={teamMap}/>}
           {section === "live" && <LiveRace race={race} collector={collector} wind={wind} athletes={athletes} teamMap={teamMap}/>}
@@ -158,6 +170,111 @@ export function RaceDashboard({section}: {section: Section}) {
         </>
       )}
     </>
+  );
+}
+
+function CollectorSetup({onSynced}: {onSynced: () => void}) {
+  const [matches, setMatches] = useState<SailFishMatch[]>([]);
+  const [matchCd, setMatchCd] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState(
+    "เริ่มจากค้นหารายการแข่งขันในบัญชี SailFish"
+  );
+
+  async function request(path: string, init?: RequestInit) {
+    const api = process.env.NEXT_PUBLIC_CONTROL_API_URL;
+    if (!api) throw new Error("ยังไม่ได้ตั้งค่า Control API URL");
+    const supabase = createClient();
+    const {data: {session}} = await supabase.auth.getSession();
+    if (!session) throw new Error("Session หมดอายุ กรุณาเข้าสู่ระบบใหม่");
+    const response = await fetch(`${api.replace(/\/$/, "")}${path}`, {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        "Content-Type": "application/json",
+        ...(init?.headers || {}),
+      },
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || `HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async function discover() {
+    setBusy(true);
+    setMessage("กำลังเชื่อม ai-brain ผ่าน Tailscale และค้นหารายการ…");
+    try {
+      const body = await request("/races/discover");
+      const items = (body.items || []) as SailFishMatch[];
+      setMatches(items);
+      setMatchCd(items[0]?.matchCd || "");
+      setMessage(items.length
+        ? `พบ ${items.length} รายการ เลือกรายการแล้วกด Sync races`
+        : "ไม่พบรายการแข่งขันในบัญชี SailFish");
+    } catch (error) {
+      setMessage(`ค้นหาไม่สำเร็จ — ${String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sync() {
+    if (!matchCd) return;
+    setBusy(true);
+    setMessage("กำลังดึงรอบการแข่งขันและบันทึกลง Supabase…");
+    try {
+      const body = await request("/races/sync", {
+        method: "POST",
+        body: JSON.stringify({match_cd: matchCd}),
+      });
+      const count = Array.isArray(body.items) ? body.items.length : 0;
+      if (!count) {
+        setMessage("รายการนี้ยังไม่มีรอบการแข่งขันที่เปิดให้ติดตาม");
+        return;
+      }
+      setMessage(`Sync สำเร็จ ${count} รอบ กำลังโหลด Dashboard…`);
+      onSynced();
+    } catch (error) {
+      setMessage(`Sync ไม่สำเร็จ — ${String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="control-layout setup-layout">
+      <section className="panel control-main">
+        <div className="control-lock">
+          <LockKeyhole/>
+          <div><b>TAILSCALE PRIVATE SETUP</b><span>คำสั่งส่งจาก browser ไป ai-brain โดยตรง</span></div>
+        </div>
+        <h2>เชื่อมรายการจาก SailFish</h2>
+        <p className="setup-copy">ค้นหารายการ เลือก Match แล้วนำรอบการแข่งขันเข้าสู่ฐานข้อมูล</p>
+        <div className="setup-actions">
+          <button className="arm" disabled={busy} onClick={discover}>
+            <Database/> {busy ? "กำลังทำงาน…" : "Discover matches"}
+          </button>
+          {matches.length > 0 && (
+            <>
+              <label htmlFor="match-picker">รายการแข่งขัน</label>
+              <select id="match-picker" value={matchCd} onChange={(event) => setMatchCd(event.target.value)}>
+                {matches.map((item) => (
+                  <option value={item.matchCd} key={item.matchCd}>
+                    {item.matchName || item.matchCd}
+                  </option>
+                ))}
+              </select>
+              <button disabled={busy || !matchCd} onClick={sync}>
+                <RefreshCw/> Sync races
+              </button>
+            </>
+          )}
+        </div>
+        <div className="control-notice">{message}</div>
+      </section>
+    </div>
   );
 }
 

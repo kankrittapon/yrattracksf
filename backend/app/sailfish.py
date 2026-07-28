@@ -56,8 +56,11 @@ class SailfishClient:
         return body.get("list") or body.get("records") or []
 
     async def sync_races(self, match_cd: str) -> list[dict[str, Any]]:
+        if not self.access_token:
+            await self.login()
         response = await self.http.get(
             "/sf-admin/api/admin-api/match/race/open/getRaceList",
+            headers=self._admin_headers(),
             params={"pageSize": 10000, "pageNo": 1, "matchCd": match_cd, "openFlag": 1},
         )
         response.raise_for_status()
@@ -104,4 +107,3 @@ class SailfishClient:
             raise RuntimeError("Live WebSocket token not found; set SAILFISH_LIVE_TOKEN or capture getRace token field")
         base = self.settings.sailfish_base_url.replace("https://", "wss://").replace("http://", "ws://")
         return f"{base.rstrip('/')}/sailfish-ntwss?token={token}"
-
