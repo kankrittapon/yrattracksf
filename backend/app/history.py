@@ -126,10 +126,9 @@ class HistoryImportManager:
             "history_imports", columns="attempts", filters={"race_cd": f"eq.{race_cd}"}, limit=1
         )
         attempts = int(current[0].get("attempts") or 0) + 1 if current else 1
-        await self.repository.upsert(
+        await self.repository.update(
             "history_imports",
-            [{
-                "race_cd": race_cd,
+            {
                 "status": "running",
                 "started_at": started_at.isoformat(),
                 "completed_at": None,
@@ -137,8 +136,8 @@ class HistoryImportManager:
                 "attempts": attempts,
                 "last_error": None,
                 "updated_at": started_at.isoformat(),
-            }],
-            "race_cd",
+            },
+            {"race_cd": race_cd},
         )
         try:
             counts = await self._import_race(race_cd)
