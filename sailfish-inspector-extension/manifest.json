@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "SailFish Network Inspector",
+  "version": "1.2.0",
+  "description": "เก็บ REST และ WebSocket ของ SailFish โดยปิดบังรหัสผ่านและ Token",
+  "permissions": ["storage", "debugger", "tabs"],
+  "host_permissions": [
+    "https://saill.cn/*",
+    "https://www.saill.cn/*"
+  ],
+  "action": {
+    "default_title": "SailFish Inspector",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://saill.cn/*", "https://www.saill.cn/*"],
+      "js": ["collector.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED",
+      "all_frames": true
+    },
+    {
+      "matches": ["https://saill.cn/*", "https://www.saill.cn/*"],
+      "js": ["page-hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    }
+  ]
+}

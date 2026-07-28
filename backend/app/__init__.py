@@ -1,0 +1,1 @@
+"""SailFish Collector backend."""

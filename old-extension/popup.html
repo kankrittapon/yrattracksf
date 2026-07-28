@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; width: 250px; padding: 15px; margin: 0; background-color: #f4f7f6; }
+        h3 { margin-top: 0; color: #333; text-align: center; }
+        .stat-box { background: white; padding: 10px; border-radius: 8px; margin-bottom: 15px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .btn { display: block; width: 100%; padding: 10px; margin-bottom: 8px; border: none; border-radius: 5px; color: white; cursor: pointer; font-weight: bold; }
+        .btn-start { background-color: #4CAF50; }
+        .btn-stop { background-color: #f44336; }
+        .btn-export { background-color: #2196F3; }
+        .btn-clear { background-color: #9e9e9e; }
+        #status { font-weight: bold; color: #f44336; }
+    </style>
+</head>
+<body>
+    <h3>⛵ SailFish Tracker</h3>
+    
+    <div class="stat-box">
+        สถานะ: <span id="status">หยุดทำงาน</span><br>
+        บันทึกแล้ว: <span id="recordCount">0</span> รายการ
+    </div>
+
+    <button id="btnStart" class="btn btn-start">▶ เริ่มเก็บข้อมูล</button>
+    <button id="btnStop" class="btn btn-stop" style="display:none;">■ หยุดเก็บข้อมูล</button>
+    <button id="btnExport" class="btn btn-export">📥 โหลดไฟล์ Excel (CSV)</button>
+    <button id="btnClear" class="btn btn-clear">🗑️ ล้างข้อมูลทั้งหมด</button>
+
+    <script src="popup.js"></script>
+</body>
+</html>

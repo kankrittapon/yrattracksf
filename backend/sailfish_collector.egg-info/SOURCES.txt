@@ -1,0 +1,17 @@
+README.md
+pyproject.toml
+app/__init__.py
+app/collector.py
+app/config.py
+app/decoder.py
+app/main.py
+app/repository.py
+app/sailfish.py
+app/schemas.py
+app/security.py
+sailfish_collector.egg-info/PKG-INFO
+sailfish_collector.egg-info/SOURCES.txt
+sailfish_collector.egg-info/dependency_links.txt
+sailfish_collector.egg-info/requires.txt
+sailfish_collector.egg-info/top_level.txt
+tests/test_decoder.py

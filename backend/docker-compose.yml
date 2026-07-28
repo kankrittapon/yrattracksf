@@ -1,0 +1,12 @@
+services:
+  sailfish-collector:
+    build: .
+    container_name: sailfish_collector
+    env_file: .env
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - sailfish_tokens:/app/data
+
+volumes:
+  sailfish_tokens:
