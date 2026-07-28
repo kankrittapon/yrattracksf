@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {
   Activity, AlertTriangle, Anchor, ArrowRight, CheckCircle2, ChevronDown, ClipboardCheck,
@@ -564,5 +565,47 @@ function LoadingState() {
   return <div className="loading-state"><RefreshCw/><p>กำลังโหลดข้อมูลที่ได้รับอนุญาต…</p></div>;
 }
 function EmptyState() {
-  return <div className="empty-state"><Anchor/><h2>ยังไม่มีการแข่งขันในฐานข้อมูล</h2><p>ให้ Admin เชื่อม Tailscale แล้ว Sync หรือ Arm race จาก Collector Control</p></div>;
+  const [backendStatus, setBackendStatus] = useState<"checking" | "online" | "offline">("checking");
+
+  useEffect(() => {
+    const api = process.env.NEXT_PUBLIC_CONTROL_API_URL;
+    if (!api) {
+      setBackendStatus("offline");
+      return;
+    }
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 6000);
+    void fetch(`${api.replace(/\/$/, "")}/health`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then((response) => setBackendStatus(response.ok ? "online" : "offline"))
+      .catch(() => setBackendStatus("offline"))
+      .finally(() => window.clearTimeout(timeout));
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, []);
+
+  const statusText = backendStatus === "checking"
+    ? "กำลังตรวจการเชื่อมต่อ…"
+    : backendStatus === "online"
+      ? "Online ผ่าน Tailscale"
+      : "Offline — ตรวจว่าอุปกรณ์เชื่อม Tailscale";
+
+  return (
+    <div className="empty-state">
+      <Anchor/>
+      <h2>ยังไม่มีการแข่งขันในฐานข้อมูล</h2>
+      <p>เริ่มจากค้นหาและ Sync รายการแข่งขันผ่าน Collector Control</p>
+      <div className={`backend-connection ${backendStatus}`}>
+        <i/>
+        <span><b>ai-brain Collector</b><small>{statusText}</small></span>
+      </div>
+      <Link className="empty-action" href="/control">
+        ไป Collector Control <ArrowRight/>
+      </Link>
+    </div>
+  );
 }
