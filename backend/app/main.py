@@ -148,15 +148,29 @@ async def sync_races(body: RaceSyncRequest, principal: Principal = Depends(requi
         for race_cd, detail in zip(race_codes, details, strict=True)
     ]
     active = [race for race in merged if str(race.get("status") or "") == "50"]
-    await _persist_races(app.state.repository, active)
+    waiting = [race for race in merged if str(race.get("status") or "") == "10"]
+    finished = [race for race in merged if str(race.get("status") or "") == "99"]
+    await _persist_races(app.state.repository, merged)
     collectors = []
     for race in active:
         race_cd = str(race["raceCd"])
         collectors.append(
             (await app.state.collectors.get_or_create(race_cd).arm()).model_dump(mode="json")
         )
+    history_imports = []
+    for race in finished:
+        history_imports.append(
+            await app.state.history.schedule_after_finish(str(race["raceCd"]), race)
+        )
     await app.state.repository.audit(principal.user_id, "races.sync", None, body.match_cd)
-    return {"items": active, "collectors": collectors, "ignored_not_started": len(races) - len(active)}
+    return {
+        "items": merged,
+        "active": active,
+        "waiting": waiting,
+        "finished": finished,
+        "collectors": collectors,
+        "history_imports": history_imports,
+    }
 
 
 @app.get("/history-imports")

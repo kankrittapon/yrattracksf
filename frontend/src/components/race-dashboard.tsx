@@ -68,6 +68,12 @@ const qualityEventName: Record<string, string> = {
   websocket_reconnect: "ช่องรับข้อมูลสดเชื่อมต่อใหม่",
 };
 
+const raceStatusLabel: Record<string, string> = {
+  "10": "รอเริ่มการแข่งขัน",
+  "50": "กำลังแข่งขัน",
+  "99": "จบการแข่งขันแล้ว",
+};
+
 export function RaceDashboard({section}: {section: Section}) {
   const [races, setRaces] = useState<Race[]>([]);
   const [raceCd, setRaceCd] = useState("");
@@ -89,9 +95,13 @@ export function RaceDashboard({section}: {section: Section}) {
       .select("*,match:matches(name),race_class:race_classes(name)")
       .order("updated_at", {ascending: false});
     const allRaces = (raceRows || []) as unknown as Race[];
-    const nextRaces = allRaces.filter((item) => section === "history"
-      ? item.sailfish_status === "99" && Boolean(item.history_imported_at)
-      : item.sailfish_status === "50");
+    const nextRaces = allRaces.filter((item) => {
+      if (section === "history") {
+        return item.sailfish_status === "99" && Boolean(item.history_imported_at);
+      }
+      if (section === "control" || section === "settings") return true;
+      return item.sailfish_status === "50";
+    });
     setRaces(nextRaces);
     const selected = nextRaces.some((item) => item.race_cd === raceCd)
       ? raceCd
@@ -200,12 +210,31 @@ export function RaceDashboard({section}: {section: Section}) {
     }
   }
 
+  async function importHistoryNow() {
+    setNotice("กำลังสั่งนำเข้าข้อมูลย้อนหลังทันที…");
+    const api = process.env.NEXT_PUBLIC_CONTROL_API_URL;
+    const supabase = createClient();
+    const {data: {session}} = await supabase.auth.getSession();
+    if (!api || !session) return setNotice("ต้องเข้าสู่ระบบและเชื่อม Tailscale ก่อน");
+    try {
+      const response = await fetch(`${api.replace(/\/$/, "")}/history-imports/${raceCd}/retry`, {
+        method: "POST",
+        headers: {Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json"},
+      });
+      if (!response.ok) throw new Error((await response.json()).detail || `HTTP ${response.status}`);
+      setNotice("เริ่มนำเข้าข้อมูลย้อนหลังแล้ว หน้านี้จะแสดงความคืบหน้า");
+      await load();
+    } catch (error) {
+      setNotice(`สั่งนำเข้าไม่สำเร็จ — ${String(error)}`);
+    }
+  }
+
   return (
     <>
       <div className="page-heading">
         <div><p className="eyebrow">ข้อมูลการแข่งขัน SAILFISH</p><h1>{titles[section][0]}</h1><span>{titles[section][1]}</span></div>
         <div className="race-picker">
-          <label>{section === "history" ? "เลือกรอบย้อนหลัง" : "เลือกรอบที่กำลังแข่ง"}</label>
+          <label>{section === "history" ? "เลือกรอบย้อนหลัง" : section === "control" || section === "settings" ? "เลือกรอบการแข่งขัน" : "เลือกรอบที่กำลังแข่ง"}</label>
           {section === "history" && <div className="history-filter-row">
             <select value={matchFilter} onChange={(event) => {setMatchFilter(event.target.value); setClassFilter("");}}>
               <option value="">ทุกรายการแข่งขัน</option>
@@ -218,7 +247,7 @@ export function RaceDashboard({section}: {section: Section}) {
           </div>}
           <select value={raceCd} onChange={(event) => setRaceCd(event.target.value)}>
             {!visibleRaces.length && <option value="">ยังไม่มีการแข่งขัน</option>}
-            {visibleRaces.map((item) => <option value={item.race_cd} key={item.race_cd}>{item.name || item.race_cd} · {item.rounds || "—"}</option>)}
+            {visibleRaces.map((item) => <option value={item.race_cd} key={item.race_cd}>{item.name || item.race_cd} · {item.rounds || "—"} · {raceStatusLabel[item.sailfish_status || ""] || "ไม่ทราบสถานะ"}</option>)}
           </select>
           <ChevronDown size={16}/>
         </div>
@@ -226,7 +255,7 @@ export function RaceDashboard({section}: {section: Section}) {
 
       {loading ? <LoadingState/> : !race ? (
         section === "control"
-          ? <CollectorSetup onSynced={() => void load()}/>
+          ? <CollectorSetup races={races} onSynced={() => void load()}/>
           : <EmptyState/>
       ) : (
         <>
@@ -234,7 +263,7 @@ export function RaceDashboard({section}: {section: Section}) {
           {section === "live" && <LiveRace race={race} collector={collector} wind={wind} athletes={athletes} teamMap={teamMap}/>}
           {section === "history" && <History race={race} teams={teams} role={role}/>}
           {section === "compare" && <Compare athletes={athletes} teamMap={teamMap}/>}
-          {section === "control" && <><CollectorSetup onSynced={() => void load()}/><Control collector={collector} race={race} notice={notice} historyImport={historyImport} onControl={control}/></>}
+          {section === "control" && <><CollectorSetup races={races} onSynced={() => void load()}/><Control collector={collector} race={race} notice={notice} historyImport={historyImport} onControl={control} onImportHistory={importHistoryNow}/></>}
           {section === "quality" && <Quality collector={collector} quality={quality} athletes={athletes} teams={teams}/>}
           {section === "settings" && <SettingsPanel race={race} wind={wind} role={role}/>}
         </>
@@ -243,7 +272,7 @@ export function RaceDashboard({section}: {section: Section}) {
   );
 }
 
-function CollectorSetup({onSynced}: {onSynced: () => void}) {
+function CollectorSetup({races, onSynced}: {races: Race[]; onSynced: () => void}) {
   const [matches, setMatches] = useState<SailFishMatch[]>([]);
   const [matchCd, setMatchCd] = useState("");
   const [busy, setBusy] = useState(false);
@@ -301,10 +330,10 @@ function CollectorSetup({onSynced}: {onSynced: () => void}) {
       });
       const count = Array.isArray(body.items) ? body.items.length : 0;
       if (!count) {
-        setMessage("ยังไม่มีรอบที่กำลังแข่งขัน — ให้เจ้าของสนามกดเริ่มใน SailFish แล้วกดเชื่อมข้อมูลอีกครั้ง");
+        setMessage("รายการนี้ยังไม่มีรอบการแข่งขันให้ติดตาม");
         return;
       }
-      setMessage(`เชื่อมข้อมูลสำเร็จ ${count} รอบ กำลังโหลดหน้าหลัก…`);
+      setMessage(`พบทั้งหมด ${count} รอบ · รอเริ่ม ${body.waiting?.length || 0} · กำลังแข่ง ${body.active?.length || 0} · จบแล้ว ${body.finished?.length || 0}`);
       onSynced();
     } catch (error) {
       setMessage(`เชื่อมข้อมูลไม่สำเร็จ — ${String(error)}`);
@@ -321,7 +350,7 @@ function CollectorSetup({onSynced}: {onSynced: () => void}) {
           <div><b>ตั้งค่าผ่านเครือข่ายส่วนตัว TAILSCALE</b><span>คำสั่งส่งจากเครื่องนี้ไปยัง ai-brain โดยตรง</span></div>
         </div>
         <h2>เชื่อมรายการจาก SailFish</h2>
-        <p className="setup-copy">ระบบจะนำเข้าและเตรียมเก็บข้อมูลเฉพาะรอบที่เจ้าของสนามกดเริ่มใน SailFish แล้วเท่านั้น</p>
+        <p className="setup-copy">โหลดประเภทเรือและทุกรอบมาเตรียมไว้ก่อนได้ ระบบจะเริ่มเก็บข้อมูลเองเมื่อเจ้าของสนามกดเริ่มใน SailFish</p>
         <div className="setup-actions">
           <button className="arm" disabled={busy} onClick={discover}>
             <Database/> {busy ? "กำลังทำงาน…" : "ค้นหารายการแข่งขัน"}
@@ -336,13 +365,20 @@ function CollectorSetup({onSynced}: {onSynced: () => void}) {
                   </option>
                 ))}
               </select>
-              <button disabled={busy || !matchCd} onClick={sync}>
-                <RefreshCw/> เชื่อมรอบที่กำลังแข่ง
+              <button className="status-refresh" disabled={busy || !matchCd} onClick={sync}>
+                <RefreshCw/> ตรวจสถานะรอบ
               </button>
             </>
           )}
         </div>
         <div className="control-notice">{message}</div>
+        {races.length > 0 && <div className="synced-race-list">
+          <div className="synced-race-head"><b>รอบที่เชื่อมไว้แล้ว</b><span>{races.length} รอบ</span></div>
+          {races.map((item) => <div className="synced-race-row" key={item.race_cd}>
+            <span><b>{item.race_class?.name || item.name || "ไม่ระบุประเภท"}</b><small>{item.rounds || "ไม่ระบุรอบ"}</small></span>
+            <i className={`race-status status-${item.sailfish_status}`}>{raceStatusLabel[item.sailfish_status || ""] || "ไม่ทราบสถานะ"}</i>
+          </div>)}
+        </div>}
       </section>
     </div>
   );
@@ -508,22 +544,32 @@ function Compare({athletes, teamMap}: {athletes: AthleteState[]; teamMap: Map<st
   );
 }
 
-function Control({collector, race, notice, historyImport, onControl}: {
+function Control({collector, race, notice, historyImport, onControl, onImportHistory}: {
   collector: Collector | null; race: Race; notice: string;
   historyImport: HistoryImport | null;
   onControl: (action: "arm" | "start-override" | "stop" | "retry") => void;
+  onImportHistory: () => void;
 }) {
   return (
     <div className="control-layout">
       <section className="panel control-main">
         <div className="control-lock"><LockKeyhole/><div><b>ควบคุมผ่านเครือข่ายส่วนตัว TAILSCALE</b><span>คำสั่งถูกส่งจากเครื่องนี้ไปยัง ai-brain โดยตรง</span></div></div>
         <h2>{race.name} · {race.rounds}</h2>
+        <div className={`selected-race-status status-${race.sailfish_status}`}>
+          สถานะจาก SailFish: <b>{raceStatusLabel[race.sailfish_status || ""] || "ไม่ทราบสถานะ"}</b>
+        </div>
         <div className="state-flow">{["idle", "armed", "waiting_for_start", "recording", "finishing", "completed"].map((state) => <span className={collector?.state === state ? "current" : ""} key={state}>{collectorState[state]}</span>)}</div>
         <div className="control-buttons">
-          <button className="arm" onClick={() => onControl("arm")}><Radio/> เตรียมเก็บข้อมูล</button>
-          <button onClick={() => onControl("start-override")}><Play/> เริ่มด้วยตนเอง</button>
-          <button onClick={() => onControl("retry")}><RefreshCw/> ลองใหม่</button>
-          <button className="danger" onClick={() => onControl("stop")}><Square/> หยุด</button>
+          {race.sailfish_status === "50" && <>
+            <button className="arm" onClick={() => onControl("arm")}><Radio/> เตรียมเก็บข้อมูล</button>
+            <button onClick={() => onControl("start-override")}><Play/> เริ่มด้วยตนเอง</button>
+            <button onClick={() => onControl("retry")}><RefreshCw/> ลองใหม่</button>
+            <button className="danger" onClick={() => onControl("stop")}><Square/> หยุด</button>
+          </>}
+          {race.sailfish_status === "10" && <p className="waiting-copy">รอเจ้าของสนามกดเริ่มใน SailFish แล้วกด “ตรวจสถานะรอบ” ด้านบนอีกครั้ง</p>}
+          {race.sailfish_status === "99" && <button className="arm" onClick={onImportHistory} disabled={historyImport?.status === "running"}>
+            <Clock3/> {historyImport?.status === "running" ? "กำลังนำเข้าข้อมูลย้อนหลัง…" : "นำเข้าข้อมูลย้อนหลังตอนนี้"}
+          </button>}
         </div>
         {notice && <div className="control-notice">{notice}</div>}
       </section>
