@@ -9,7 +9,9 @@ import {
 } from "lucide-react";
 import {createClient} from "@/lib/supabase/client";
 import {bangkokTime, directionName, freshness, number} from "@/lib/format";
-import type {AthleteState, Collector, Race, Section, Team, WindState} from "@/types/dashboard";
+import type {
+  AthleteState, Collector, HistoryImport, Race, RaceClass, Section, Team, WindState,
+} from "@/types/dashboard";
 
 interface QualityEvent {
   id: number;
@@ -49,26 +51,37 @@ export function RaceDashboard({section}: {section: Section}) {
   const [role, setRole] = useState("viewer");
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
+  const [historyImport, setHistoryImport] = useState<HistoryImport | null>(null);
+  const [matchFilter, setMatchFilter] = useState("");
+  const [classFilter, setClassFilter] = useState("");
 
   const load = useCallback(async () => {
     const supabase = createClient();
-    const {data: raceRows} = await supabase.from("races").select("*").order("updated_at", {ascending: false});
-    const nextRaces = (raceRows || []) as Race[];
+    const {data: raceRows} = await supabase.from("races")
+      .select("*,match:matches(name),race_class:race_classes(name)")
+      .order("updated_at", {ascending: false});
+    const allRaces = (raceRows || []) as unknown as Race[];
+    const nextRaces = allRaces.filter((item) => section === "history"
+      ? item.sailfish_status === "99" && Boolean(item.history_imported_at)
+      : item.sailfish_status === "50");
     setRaces(nextRaces);
-    const selected = raceCd || nextRaces[0]?.race_cd || "";
-    if (!raceCd && selected) setRaceCd(selected);
+    const selected = nextRaces.some((item) => item.race_cd === raceCd)
+      ? raceCd
+      : nextRaces[0]?.race_cd || "";
+    if (raceCd !== selected) setRaceCd(selected);
     if (!selected) {
       setLoading(false);
       return;
     }
     const {data: {user}} = await supabase.auth.getUser();
-    const [teamResult, athleteResult, windResult, collectorResult, qualityResult, profileResult] = await Promise.all([
+    const [teamResult, athleteResult, windResult, collectorResult, qualityResult, profileResult, importResult] = await Promise.all([
       supabase.from("teams").select("*").eq("race_cd", selected),
       supabase.from("live_athlete_state").select("*").eq("race_cd", selected).order("captured_at_ms", {ascending: false}),
       supabase.from("live_wind_state").select("*").eq("race_cd", selected).order("captured_at_ms", {ascending: false}).limit(1).maybeSingle(),
       supabase.from("collector_status").select("*").eq("race_cd", selected).maybeSingle(),
       supabase.from("data_quality_events").select("*").eq("race_cd", selected).order("created_at", {ascending: false}).limit(30),
       user ? supabase.from("profiles").select("role").eq("id", user.id).maybeSingle() : Promise.resolve({data: null}),
+      supabase.from("history_imports").select("*").eq("race_cd", selected).maybeSingle(),
     ]);
     setTeams((teamResult.data || []) as Team[]);
     setAthletes((athleteResult.data || []) as AthleteState[]);
@@ -76,8 +89,9 @@ export function RaceDashboard({section}: {section: Section}) {
     setCollector((collectorResult.data || null) as Collector | null);
     setQuality((qualityResult.data || []) as QualityEvent[]);
     setRole(profileResult.data?.role || "viewer");
+    setHistoryImport((importResult.data || null) as HistoryImport | null);
     setLoading(false);
-  }, [raceCd]);
+  }, [raceCd, section]);
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
@@ -108,6 +122,23 @@ export function RaceDashboard({section}: {section: Section}) {
   }, [section, raceCd]);
 
   const race = races.find((item) => item.race_cd === raceCd);
+  const matchOptions = useMemo(
+    () => [...new Map(races.map((item) => [item.match_cd, item.match?.name || item.match_cd])).entries()],
+    [races],
+  );
+  const classOptions = useMemo(
+    () => [...new Map(races
+      .filter((item) => !matchFilter || item.match_cd === matchFilter)
+      .map((item) => [item.level_cd || "", item.race_class?.name || item.level_cd || "ไม่ระบุประเภท"])).entries()],
+    [races, matchFilter],
+  );
+  const visibleRaces = races.filter((item) =>
+    (!matchFilter || item.match_cd === matchFilter)
+    && (!classFilter || item.level_cd === classFilter));
+  useEffect(() => {
+    if (section !== "history" || visibleRaces.some((item) => item.race_cd === raceCd)) return;
+    setRaceCd(visibleRaces[0]?.race_cd || "");
+  }, [classFilter, matchFilter, raceCd, section, visibleRaces]);
   const teamMap = useMemo(() => new Map(teams.map((team) => [team.team_cd, team])), [teams]);
   const liveCount = athletes.filter((item) => freshness(item.updated_at).className === "live").length;
 
@@ -146,10 +177,20 @@ export function RaceDashboard({section}: {section: Section}) {
       <div className="page-heading">
         <div><p className="eyebrow">SAILFISH TELEMETRY</p><h1>{titles[section][0]}</h1><span>{titles[section][1]}</span></div>
         <div className="race-picker">
-          <label>ACTIVE RACE</label>
+          <label>{section === "history" ? "HISTORY RACE" : "ACTIVE RACE"}</label>
+          {section === "history" && <div className="history-filter-row">
+            <select value={matchFilter} onChange={(event) => {setMatchFilter(event.target.value); setClassFilter("");}}>
+              <option value="">ทุกรายการแข่งขัน</option>
+              {matchOptions.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+            </select>
+            <select value={classFilter} onChange={(event) => setClassFilter(event.target.value)}>
+              <option value="">ทุกประเภทเรือ</option>
+              {classOptions.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+            </select>
+          </div>}
           <select value={raceCd} onChange={(event) => setRaceCd(event.target.value)}>
-            {!races.length && <option value="">ยังไม่มีการแข่งขัน</option>}
-            {races.map((item) => <option value={item.race_cd} key={item.race_cd}>{item.name || item.race_cd} · {item.rounds || "—"}</option>)}
+            {!visibleRaces.length && <option value="">ยังไม่มีการแข่งขัน</option>}
+            {visibleRaces.map((item) => <option value={item.race_cd} key={item.race_cd}>{item.name || item.race_cd} · {item.rounds || "—"}</option>)}
           </select>
           <ChevronDown size={16}/>
         </div>
@@ -165,9 +206,9 @@ export function RaceDashboard({section}: {section: Section}) {
           {section === "live" && <LiveRace race={race} collector={collector} wind={wind} athletes={athletes} teamMap={teamMap}/>}
           {section === "history" && <History race={race} teams={teams} role={role}/>}
           {section === "compare" && <Compare athletes={athletes} teamMap={teamMap}/>}
-          {section === "control" && <Control collector={collector} race={race} notice={notice} onControl={control}/>}
+          {section === "control" && <><CollectorSetup onSynced={() => void load()}/><Control collector={collector} race={race} notice={notice} historyImport={historyImport} onControl={control}/></>}
           {section === "quality" && <Quality collector={collector} quality={quality} athletes={athletes} teams={teams}/>}
-          {section === "settings" && <SettingsPanel race={race} wind={wind}/>}
+          {section === "settings" && <SettingsPanel race={race} wind={wind} role={role}/>}
         </>
       )}
     </>
@@ -212,7 +253,7 @@ function CollectorSetup({onSynced}: {onSynced: () => void}) {
       setMatches(items);
       setMatchCd(items[0]?.matchCd || "");
       setMessage(items.length
-        ? `พบ ${items.length} รายการ เลือกรายการแล้วกด Sync races`
+        ? `พบ ${items.length} รายการ เลือกรายการแล้วกด Sync Active Races`
         : "ไม่พบรายการแข่งขันในบัญชี SailFish");
     } catch (error) {
       setMessage(`ค้นหาไม่สำเร็จ — ${String(error)}`);
@@ -224,7 +265,7 @@ function CollectorSetup({onSynced}: {onSynced: () => void}) {
   async function sync() {
     if (!matchCd) return;
     setBusy(true);
-    setMessage("กำลังดึงรอบการแข่งขันและบันทึกลง Supabase…");
+    setMessage("กำลังตรวจรอบที่เจ้าของสนามกด Start และเปิด Collector…");
     try {
       const body = await request("/races/sync", {
         method: "POST",
@@ -232,7 +273,7 @@ function CollectorSetup({onSynced}: {onSynced: () => void}) {
       });
       const count = Array.isArray(body.items) ? body.items.length : 0;
       if (!count) {
-        setMessage("รายการนี้ยังไม่มีรอบการแข่งขันที่เปิดให้ติดตาม");
+        setMessage("ยังไม่มีรอบสถานะ Live (50) — ให้เจ้าของสนามกด Start ใน SailFish แล้วกด Sync อีกครั้ง");
         return;
       }
       setMessage(`Sync สำเร็จ ${count} รอบ กำลังโหลด Dashboard…`);
@@ -252,7 +293,7 @@ function CollectorSetup({onSynced}: {onSynced: () => void}) {
           <div><b>TAILSCALE PRIVATE SETUP</b><span>คำสั่งส่งจาก browser ไป ai-brain โดยตรง</span></div>
         </div>
         <h2>เชื่อมรายการจาก SailFish</h2>
-        <p className="setup-copy">ค้นหารายการ เลือก Match แล้วนำรอบการแข่งขันเข้าสู่ฐานข้อมูล</p>
+        <p className="setup-copy">ระบบจะนำเข้าและ Arm เฉพาะรอบที่เจ้าของสนามกด Start ใน SailFish แล้วเท่านั้น</p>
         <div className="setup-actions">
           <button className="arm" disabled={busy} onClick={discover}>
             <Database/> {busy ? "กำลังทำงาน…" : "Discover matches"}
@@ -268,7 +309,7 @@ function CollectorSetup({onSynced}: {onSynced: () => void}) {
                 ))}
               </select>
               <button disabled={busy || !matchCd} onClick={sync}>
-                <RefreshCw/> Sync races
+                <RefreshCw/> Sync Active Races
               </button>
             </>
           )}
@@ -439,8 +480,9 @@ function Compare({athletes, teamMap}: {athletes: AthleteState[]; teamMap: Map<st
   );
 }
 
-function Control({collector, race, notice, onControl}: {
+function Control({collector, race, notice, historyImport, onControl}: {
   collector: Collector | null; race: Race; notice: string;
+  historyImport: HistoryImport | null;
   onControl: (action: "arm" | "start-override" | "stop" | "retry") => void;
 }) {
   return (
@@ -465,7 +507,11 @@ function Control({collector, race, notice, onControl}: {
           <dt>Messages</dt><dd>{collector?.messages_received || 0}</dd>
           <dt>Reconnects</dt><dd>{collector?.reconnects || 0}</dd>
           <dt>Last message</dt><dd>{bangkokTime(collector?.last_message_at)}</dd>
+          <dt>History import</dt><dd>{historyImport?.status || "รอ Finish"}</dd>
+          <dt>History schedule</dt><dd>{historyImport ? bangkokTime(historyImport.scheduled_for) : "หลังจบ 90 นาที"}</dd>
+          <dt>Import progress</dt><dd>{number(historyImport?.progress_percent, 0)}%</dd>
         </dl>
+        {historyImport?.last_error && <div className="control-notice">{historyImport.last_error}</div>}
       </section>
     </div>
   );
@@ -490,13 +536,53 @@ function Quality({collector, quality, athletes, teams}: {collector: Collector | 
   );
 }
 
-function SettingsPanel({race, wind}: {race: Race; wind: WindState | null}) {
+function SettingsPanel({race, wind, role}: {race: Race; wind: WindState | null; role: string}) {
+  const [classes, setClasses] = useState<RaceClass[]>([]);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    const supabase = createClient();
+    void supabase.from("race_classes").select("*").eq("match_cd", race.match_cd).order("name")
+      .then(({data}) => setClasses((data || []) as RaceClass[]));
+  }, [race.match_cd]);
+
+  async function saveVisibility(item: RaceClass, field: "public_live_enabled" | "public_history_enabled") {
+    if (role !== "admin") return;
+    const api = process.env.NEXT_PUBLIC_CONTROL_API_URL;
+    const supabase = createClient();
+    const {data: {session}} = await supabase.auth.getSession();
+    if (!api || !session) return setMessage("ต้อง Login และเชื่อม Tailscale ก่อนแก้สิทธิ์");
+    const next = {...item, [field]: !item[field]};
+    try {
+      const response = await fetch(`${api.replace(/\/$/, "")}/race-classes/${item.level_cd}/visibility`, {
+        method: "POST",
+        headers: {Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json"},
+        body: JSON.stringify({
+          public_live_enabled: next.public_live_enabled,
+          public_history_enabled: next.public_history_enabled,
+        }),
+      });
+      if (!response.ok) throw new Error((await response.json()).detail || `HTTP ${response.status}`);
+      setClasses((values) => values.map((value) => value.level_cd === item.level_cd ? next : value));
+      setMessage(`บันทึกสิทธิ์ Public ของ ${item.name} แล้ว`);
+    } catch (error) {
+      setMessage(`บันทึกไม่ได้ — เช็ก Tailscale (${String(error)})`);
+    }
+  }
+
   return (
     <div className="settings-grid">
       <section className="panel setting-card"><Settings2/><h3>Wind reference</h3><p>Main instrument</p><code>{race.main_wind_instrument_cd || wind?.wind_instrument_cd || "Not assigned"}</code><button disabled>เปลี่ยนผ่าน migration/config</button></section>
       <section className="panel setting-card"><Clock3/><h3>Time & freshness</h3><p>Display: Asia/Bangkok</p><code>wind tolerance = 5 seconds</code><button disabled>UTC storage enforced</button></section>
       <section className="panel setting-card"><Database/><h3>Retention</h3><p>Normalized: long-term</p><code>raw payload = 30 days</code><button disabled>Scheduled cleanup</button></section>
-      <section className="panel setting-card"><ShieldCheck/><h3>Privacy</h3><p>Authenticated members only</p><code>RLS + audit logging</code><button disabled>Admin managed</button></section>
+      <section className="panel setting-card public-settings"><ShieldCheck/><h3>Public visibility</h3><p>อนุญาตแยก Live และ History รายประเภทเรือ</p>
+        {classes.map((item) => <div className="class-visibility" key={item.level_cd}>
+          <b>{item.name}</b>
+          <button disabled={role !== "admin"} className={item.public_live_enabled ? "enabled" : ""} onClick={() => saveVisibility(item, "public_live_enabled")}>Live {item.public_live_enabled ? "ON" : "OFF"}</button>
+          <button disabled={role !== "admin"} className={item.public_history_enabled ? "enabled" : ""} onClick={() => saveVisibility(item, "public_history_enabled")}>History {item.public_history_enabled ? "ON" : "OFF"}</button>
+        </div>)}
+        {message && <div className="control-notice">{message}</div>}
+      </section>
     </div>
   );
 }

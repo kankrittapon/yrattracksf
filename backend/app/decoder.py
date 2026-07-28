@@ -26,7 +26,22 @@ def course_to_wind(sog_knots: float, cog_degree: float, wind_from_degree: float)
 
 
 def decode_snapshot_result(compressed: str) -> dict[str, Any]:
-    decoded = LZString().decompressFromBase64(compressed.replace(" ", "+"))
+    value = compressed.replace(" ", "+")
+    decoded = None
+    decoders = (
+        LZString().decompressFromEncodedURIComponent,
+        LZString().decompressFromBase64,
+    ) if any(item in value for item in ("-", "$")) else (
+        LZString().decompressFromBase64,
+        LZString().decompressFromEncodedURIComponent,
+    )
+    for decoder in decoders:
+        try:
+            decoded = decoder(value)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if decoded:
+            break
     if not decoded:
         raise ValueError("Unable to decompress SailFish snapshot")
     value = json.loads(decoded)
@@ -38,7 +53,10 @@ def decode_snapshot_result(compressed: str) -> dict[str, Any]:
 def _number(runtime: list[Any], index: int) -> float | None:
     if index >= len(runtime) or runtime[index] in ("", None):
         return None
-    return float(runtime[index])
+    try:
+        return float(runtime[index])
+    except (TypeError, ValueError):
+        return None
 
 
 def _integer(runtime: list[Any], index: int) -> int | None:
@@ -113,4 +131,3 @@ def decode_live_frame(message: str) -> LiveFrame:
         message,
         list(dict.fromkeys(entity_ids)),
     )
-

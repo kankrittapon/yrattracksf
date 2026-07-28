@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     token_encryption_key: str = ""
     snapshot_interval_seconds: int = 10
     race_status_poll_seconds: float = 2.0
+    history_import_delay_minutes: int = 90
+    history_import_retry_minutes: int = 15
+    history_scheduler_interval_seconds: int = 30
     raw_retention_days: int = 30
     wind_freshness_seconds: int = 5
     batch_flush_seconds: float = 1.0

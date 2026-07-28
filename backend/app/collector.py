@@ -3,6 +3,7 @@ import json
 import logging
 from datetime import UTC, datetime
 from time import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import websockets
@@ -45,11 +46,13 @@ class RaceCollector:
         settings: Settings,
         sailfish: SailfishClient,
         repository: Repository,
+        on_finished: Callable[[str, dict[str, Any]], Awaitable[Any]] | None = None,
     ) -> None:
         self.race_cd = race_cd
         self.settings = settings
         self.sailfish = sailfish
         self.repository = repository
+        self.on_finished = on_finished
         self.status = CollectorStatus(race_cd=race_cd, state=CollectorState.IDLE)
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
@@ -397,6 +400,8 @@ class RaceCollector:
                     "source": source,
                 },
             )
+            if previous_status != SAILFISH_FINISHED_STATUS and self.on_finished:
+                await self.on_finished(self.race_cd, race)
             self._stop.set()
         else:
             logger.warning(
@@ -449,15 +454,28 @@ class RaceCollector:
 
 
 class CollectorManager:
-    def __init__(self, settings: Settings, sailfish: SailfishClient, repository: Repository) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        sailfish: SailfishClient,
+        repository: Repository,
+        on_finished: Callable[[str, dict[str, Any]], Awaitable[Any]] | None = None,
+    ) -> None:
         self.settings = settings
         self.sailfish = sailfish
         self.repository = repository
+        self.on_finished = on_finished
         self.collectors: dict[str, RaceCollector] = {}
 
     def get_or_create(self, race_cd: str) -> RaceCollector:
         if race_cd not in self.collectors:
-            self.collectors[race_cd] = RaceCollector(race_cd, self.settings, self.sailfish, self.repository)
+            self.collectors[race_cd] = RaceCollector(
+                race_cd,
+                self.settings,
+                self.sailfish,
+                self.repository,
+                self.on_finished,
+            )
         return self.collectors[race_cd]
 
     async def shutdown(self) -> None:

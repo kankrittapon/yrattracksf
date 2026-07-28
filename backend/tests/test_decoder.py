@@ -1,6 +1,14 @@
 import json
 
-from app.decoder import course_to_wind, decode_live_frame, normalize_team, wrap_to_180
+from lzstring import LZString
+
+from app.decoder import (
+    course_to_wind,
+    decode_live_frame,
+    decode_snapshot_result,
+    normalize_team,
+    wrap_to_180,
+)
 
 
 def test_wrap_to_180() -> None:
@@ -44,3 +52,8 @@ def test_live_frame_types() -> None:
     assert binary.kind == "binary"
     assert "8fe09e46577c4b188e4896ac7e559546" in binary.entity_ids
 
+
+def test_replay_uri_safe_payload() -> None:
+    payload = {"team-1": [["", "value"]], "kind": "replay"}
+    compressed = LZString().compressToEncodedURIComponent(json.dumps(payload))
+    assert decode_snapshot_result(compressed) == payload

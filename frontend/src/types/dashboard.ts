@@ -2,12 +2,37 @@ export type Section = "overview" | "live" | "history" | "compare" | "control" | 
 
 export interface Race {
   race_cd: string;
+  match_cd: string;
+  level_cd: string | null;
   name: string | null;
   rounds: string | null;
   group_name: string | null;
   sailfish_status: string | null;
   main_wind_instrument_cd: string | null;
+  start_at: string | null;
+  end_at: string | null;
+  history_imported_at: string | null;
   updated_at: string;
+  match?: {name: string} | null;
+  race_class?: {name: string} | null;
+}
+
+export interface RaceClass {
+  level_cd: string;
+  match_cd: string;
+  name: string;
+  public_live_enabled: boolean;
+  public_history_enabled: boolean;
+}
+
+export interface HistoryImport {
+  race_cd: string;
+  status: "pending" | "running" | "completed" | "error";
+  scheduled_for: string;
+  progress_percent: number;
+  athlete_readings_count: number;
+  wind_readings_count: number;
+  last_error: string | null;
 }
 
 export interface Team {

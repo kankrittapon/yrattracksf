@@ -27,6 +27,11 @@ class RaceSyncRequest(BaseModel):
     match_cd: str = Field(min_length=16, max_length=64)
 
 
+class RaceClassVisibilityRequest(BaseModel):
+    public_live_enabled: bool
+    public_history_enabled: bool
+
+
 class CollectorStatus(BaseModel):
     race_cd: str
     state: CollectorState
@@ -47,4 +52,3 @@ class Principal(BaseModel):
     email: str | None = None
     role: str
     claims: dict[str, Any] = Field(default_factory=dict)
-

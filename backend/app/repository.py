@@ -46,6 +46,30 @@ class Repository:
         )
         response.raise_for_status()
 
+    async def select(
+        self,
+        table: str,
+        *,
+        columns: str = "*",
+        filters: dict[str, str] | None = None,
+        order: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        if not self.enabled:
+            return []
+        params: dict[str, Any] = {"select": columns, **(filters or {})}
+        if order:
+            params["order"] = order
+        if limit:
+            params["limit"] = limit
+        response = await self.http.get(
+            f"{self.settings.supabase_url.rstrip('/')}/rest/v1/{table}",
+            params=params,
+            headers=self._headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
     async def update(
         self,
         table: str,
@@ -129,3 +153,16 @@ class Repository:
                 "created_at": datetime.now(UTC).isoformat(),
             }],
         )
+
+    async def upsert_batches(
+        self,
+        table: str,
+        rows: list[dict[str, Any]],
+        on_conflict: str,
+    ) -> None:
+        for offset in range(0, len(rows), self.settings.batch_size):
+            await self.upsert(
+                table,
+                rows[offset:offset + self.settings.batch_size],
+                on_conflict,
+            )

@@ -110,6 +110,43 @@ class SailfishClient:
         body = response.json()
         return decode_snapshot_result(body["result"])
 
+    async def get_replay_snapshot(self, race_cd: str, at_ms: int) -> dict[str, Any]:
+        response = await self.http.get(
+            "/sf-admin/api/app-api/match/race/replay2/getRaceDatas",
+            params={"raceCd": race_cd, "time": at_ms},
+        )
+        response.raise_for_status()
+        body = response.json()
+        return decode_snapshot_result(body["result"])
+
+    async def get_replay_chunk(
+        self,
+        *,
+        race_cd: str,
+        match_cd: str,
+        rounds: str,
+        time_span_minutes: int,
+        end_at_ms: int,
+        chunk_at_ms: int,
+    ) -> tuple[str, dict[str, Any]]:
+        response = await self.http.get(
+            "/sf-admin/api/app-api/match/race/replay2/getEncryptionReplayData",
+            params={
+                "raceCd": race_cd,
+                "matchCd": match_cd,
+                "rounds": rounds,
+                "replayFlag": 0,
+                "timeSpan": time_span_minutes,
+                "asTime": end_at_ms,
+                "timestamp": chunk_at_ms,
+                "nonCache": "false",
+            },
+        )
+        response.raise_for_status()
+        body = response.json()
+        compressed = body["result"]
+        return compressed, decode_snapshot_result(compressed)
+
     @staticmethod
     def find_live_token(value: Any) -> str | None:
         if isinstance(value, dict):

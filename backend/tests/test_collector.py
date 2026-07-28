@@ -41,7 +41,7 @@ class FakeSailfish:
     pass
 
 
-def make_collector() -> tuple[RaceCollector, FakeRepository]:
+def make_collector(on_finished=None) -> tuple[RaceCollector, FakeRepository]:
     repository = FakeRepository()
     settings = SimpleNamespace(race_status_poll_seconds=0.01)
     collector = RaceCollector(
@@ -49,12 +49,18 @@ def make_collector() -> tuple[RaceCollector, FakeRepository]:
         settings,
         FakeSailfish(),
         repository,
+        on_finished,
     )
     return collector, repository
 
 
 async def test_confirmed_status_lifecycle_and_event_deduplication() -> None:
-    collector, repository = make_collector()
+    finished: list[tuple[str, dict]] = []
+
+    async def on_finished(race_cd: str, race: dict) -> None:
+        finished.append((race_cd, race))
+
+    collector, repository = make_collector(on_finished)
 
     await collector._apply_sailfish_status(
         {"status": "10", "startTime": "", "endTime": ""},
@@ -87,6 +93,12 @@ async def test_confirmed_status_lifecycle_and_event_deduplication() -> None:
     assert collector._stop.is_set()
     assert ("race-1", "sailfish_finished") in repository.events
     assert len(repository.events) == 2
+    assert len(finished) == 1
+
+    await collector._apply_sailfish_status(
+        {"status": "99", "endTime": "1785248840000"}, source="test"
+    )
+    assert len(finished) == 1
 
 
 async def test_status_10_does_not_cancel_manual_recording_override() -> None:
