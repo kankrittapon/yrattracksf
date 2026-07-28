@@ -116,6 +116,8 @@ class HistoryImportManager:
         current = self._tasks.get(race_cd)
         if current and not current.done():
             return
+        if any(not task.done() for task in self._tasks.values()):
+            return
         task = asyncio.create_task(self._import_guarded(race_cd), name=f"history-import:{race_cd}")
         self._tasks[race_cd] = task
         task.add_done_callback(lambda _: self._tasks.pop(race_cd, None))
