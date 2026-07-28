@@ -15,6 +15,28 @@ from .schemas import CollectorState, CollectorStatus
 
 logger = logging.getLogger(__name__)
 
+SAILFISH_WAITING_STATUS = "10"
+SAILFISH_RECORDING_STATUS = "50"
+SAILFISH_FINISHED_STATUS = "99"
+
+
+def _timestamp(value: Any, fallback: datetime) -> datetime:
+    if value in (None, ""):
+        return fallback
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    if numeric > 10_000_000_000:
+        numeric /= 1000
+    return datetime.fromtimestamp(numeric, UTC)
+
+
+def _timestamp_iso(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    return _timestamp(value, datetime.now(UTC)).isoformat()
+
 
 class RaceCollector:
     def __init__(
@@ -34,6 +56,7 @@ class RaceCollector:
         self._force_recording = False
         self._race: dict[str, Any] = {}
         self._entity_types: dict[str, str] = {}
+        self._last_sailfish_status: str | None = None
 
     async def arm(self) -> CollectorStatus:
         if self._task and not self._task.done():
@@ -90,8 +113,14 @@ class RaceCollector:
 
     async def _bootstrap(self) -> None:
         self._race = await self.sailfish.get_race(self.race_cd)
+        admin_race = await self.sailfish.get_admin_race(self.race_cd)
         snapshot = await self.sailfish.get_snapshot(self.race_cd, int(time() * 1000))
-        self.status.sailfish_status = str(snapshot.get("status") or self._race.get("status") or "")
+        sailfish_status = str(
+            admin_race.get("status")
+            or snapshot.get("status")
+            or self._race.get("status")
+            or ""
+        )
         match_cd = str(snapshot.get("matchCd") or self._race.get("matchCd") or "")
         level_cd = str(snapshot.get("levelCd") or self._race.get("levelCd") or "")
         if match_cd:
@@ -125,7 +154,9 @@ class RaceCollector:
                     "name": snapshot.get("raceName") or self._race.get("raceName"),
                     "rounds": snapshot.get("rounds") or self._race.get("rounds"),
                     "group_name": snapshot.get("groupName") or self._race.get("groupName"),
-                    "sailfish_status": self.status.sailfish_status,
+                    "sailfish_status": sailfish_status,
+                    "start_at": _timestamp_iso(admin_race.get("startTime")),
+                    "end_at": _timestamp_iso(admin_race.get("endTime")),
                     "raw_metadata": {"source": "collector_bootstrap"},
                 }],
                 "race_cd",
@@ -200,12 +231,16 @@ class RaceCollector:
                     [row],
                     "race_cd,wind_instrument_cd,captured_at_ms",
                 )
-        self.status.state = CollectorState.WAITING_FOR_START
-        await self._persist_status()
+        await self._apply_sailfish_status(admin_race, source="admin_bootstrap")
 
     async def _run(self) -> None:
+        polling: asyncio.Task[None] | None = None
         try:
             await self._bootstrap()
+            polling = asyncio.create_task(
+                self._poll_status(),
+                name=f"race-status:{self.race_cd}",
+            )
             backoff = 1
             while not self._stop.is_set():
                 try:
@@ -230,6 +265,9 @@ class RaceCollector:
             self.status.last_error = str(exc)
             logger.exception("Collector %s failed", self.race_cd)
         finally:
+            if polling:
+                polling.cancel()
+                await asyncio.gather(polling, return_exceptions=True)
             self.status.websocket_connected = False
             if self.status.state == CollectorState.FINISHING:
                 self.status.state = CollectorState.COMPLETED
@@ -253,15 +291,23 @@ class RaceCollector:
                 await socket.send(json.dumps({"subscribe": topic}, separators=(",", ":")))
 
             heartbeat = asyncio.create_task(self._heartbeat(socket))
-            polling = asyncio.create_task(self._poll_status())
             try:
-                async for message in socket:
-                    if self._stop.is_set():
-                        break
-                    await self._handle_message(str(message))
+                while not self._stop.is_set():
+                    receive = asyncio.create_task(socket.recv())
+                    stopping = asyncio.create_task(self._stop.wait())
+                    done, pending = await asyncio.wait(
+                        {receive, stopping},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for task in pending:
+                        task.cancel()
+                    await asyncio.gather(*pending, return_exceptions=True)
+                    if stopping in done:
+                        return
+                    await self._handle_message(str(receive.result()))
             finally:
                 heartbeat.cancel()
-                polling.cancel()
+                await asyncio.gather(heartbeat, return_exceptions=True)
                 self.status.websocket_connected = False
 
     async def _heartbeat(self, socket: Any) -> None:
@@ -271,14 +317,95 @@ class RaceCollector:
 
     async def _poll_status(self) -> None:
         while not self._stop.is_set():
-            await asyncio.sleep(self.settings.snapshot_interval_seconds)
-            race = await self.sailfish.get_race(self.race_cd)
-            status = str(race.get("status") or "")
-            self.status.sailfish_status = status
-            if status == "99":
-                self.status.state = CollectorState.FINISHING
-                self._stop.set()
+            try:
+                await asyncio.wait_for(
+                    self._stop.wait(),
+                    timeout=self.settings.race_status_poll_seconds,
+                )
                 return
+            except TimeoutError:
+                pass
+            try:
+                race = await self.sailfish.get_admin_race(self.race_cd)
+                await self._apply_sailfish_status(race, source="admin_poll")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.status.last_error = f"Race status poll failed: {exc}"
+                logger.warning(
+                    "Collector %s status poll failed: %s",
+                    self.race_cd,
+                    exc,
+                )
+                await self._persist_status()
+
+    async def _apply_sailfish_status(
+        self,
+        race: dict[str, Any],
+        source: str,
+    ) -> None:
+        observed_at = datetime.now(UTC)
+        sailfish_status = str(race.get("status") or "")
+        if not sailfish_status:
+            return
+
+        previous_status = self._last_sailfish_status
+        self._last_sailfish_status = sailfish_status
+        self.status.sailfish_status = sailfish_status
+        self.status.last_error = None
+
+        await self.repository.update(
+            "races",
+            {
+                "sailfish_status": sailfish_status,
+                "start_at": _timestamp_iso(race.get("startTime")),
+                "end_at": _timestamp_iso(race.get("endTime")),
+                "updated_at": observed_at.isoformat(),
+            },
+            {"race_cd": self.race_cd},
+        )
+
+        if sailfish_status == SAILFISH_WAITING_STATUS:
+            if not self._force_recording:
+                self.status.state = CollectorState.WAITING_FOR_START
+                self.status.phase_source = f"{source}:status_10"
+        elif sailfish_status == SAILFISH_RECORDING_STATUS:
+            self.status.state = CollectorState.RECORDING
+            self.status.phase_source = f"{source}:status_50"
+            await self.repository.store_race_event_once(
+                self.race_cd,
+                "sailfish_started",
+                _timestamp(race.get("startTime"), observed_at),
+                "recording",
+                {
+                    "status": sailfish_status,
+                    "previous_status": previous_status,
+                    "source": source,
+                },
+            )
+        elif sailfish_status == SAILFISH_FINISHED_STATUS:
+            self.status.state = CollectorState.FINISHING
+            self.status.phase_source = f"{source}:status_99"
+            await self.repository.store_race_event_once(
+                self.race_cd,
+                "sailfish_finished",
+                _timestamp(race.get("endTime"), observed_at),
+                "finishing",
+                {
+                    "status": sailfish_status,
+                    "previous_status": previous_status,
+                    "source": source,
+                },
+            )
+            self._stop.set()
+        else:
+            logger.warning(
+                "Collector %s received unknown SailFish race status %s",
+                self.race_cd,
+                sailfish_status,
+            )
+
+        await self._persist_status()
 
     async def _handle_message(self, message: str) -> None:
         now = datetime.now(UTC)

@@ -81,6 +81,26 @@ class SailfishClient:
         body = response.json()
         return body.get("data") or body.get("result") or body
 
+    async def get_admin_race(self, race_cd: str) -> dict[str, Any]:
+        """Read the authoritative race status observed on the SailFish admin page."""
+        if not self.access_token:
+            await self.login()
+        response = await self.http.get(
+            "/sf-admin/api/admin-api/match/race/get",
+            headers=self._admin_headers(),
+            params={"raceCd": race_cd},
+        )
+        if response.status_code == 401:
+            await self.login()
+            response = await self.http.get(
+                "/sf-admin/api/admin-api/match/race/get",
+                headers=self._admin_headers(),
+                params={"raceCd": race_cd},
+            )
+        response.raise_for_status()
+        body = response.json()
+        return body.get("data") or body.get("result") or body
+
     async def get_snapshot(self, race_cd: str, at_ms: int) -> dict[str, Any]:
         response = await self.http.get(
             "/sf-admin/api/app-api/match/race/live2/getRaceDatas",

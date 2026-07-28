@@ -46,6 +46,58 @@ class Repository:
         )
         response.raise_for_status()
 
+    async def update(
+        self,
+        table: str,
+        values: dict[str, Any],
+        filters: dict[str, str],
+    ) -> None:
+        if not self.enabled or not values:
+            return
+        response = await self.http.patch(
+            f"{self.settings.supabase_url.rstrip('/')}/rest/v1/{table}",
+            params={key: f"eq.{value}" for key, value in filters.items()},
+            headers=self._headers("return=minimal"),
+            json=values,
+        )
+        response.raise_for_status()
+
+    async def store_race_event_once(
+        self,
+        race_cd: str,
+        event_type: str,
+        captured_at: datetime,
+        phase: str,
+        payload: dict[str, Any],
+    ) -> bool:
+        """Store a one-time lifecycle event without duplicating it after restart."""
+        if not self.enabled:
+            return False
+        response = await self.http.get(
+            f"{self.settings.supabase_url.rstrip('/')}/rest/v1/race_events",
+            params={
+                "select": "id",
+                "race_cd": f"eq.{race_cd}",
+                "event_type": f"eq.{event_type}",
+                "limit": "1",
+            },
+            headers=self._headers(),
+        )
+        response.raise_for_status()
+        if response.json():
+            return False
+        await self.insert(
+            "race_events",
+            [{
+                "race_cd": race_cd,
+                "event_type": event_type,
+                "captured_at": captured_at.isoformat(),
+                "phase": phase,
+                "payload": payload,
+            }],
+        )
+        return True
+
     async def store_raw(
         self,
         race_cd: str,
@@ -77,4 +129,3 @@ class Repository:
                 "created_at": datetime.now(UTC).isoformat(),
             }],
         )
-
