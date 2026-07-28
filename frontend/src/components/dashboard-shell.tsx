@@ -35,7 +35,7 @@ export function DashboardShell({
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="sidebar-brand"><span><Wind size={22}/></span><div><b>SailFish</b><small>ระบบวิเคราะห์การแข่งขัน</small></div></div>
+        <div className="sidebar-brand"><span><Wind size={22}/></span><div><b>SailFish</b><small>สมาคมเรือใบแห่งประเทศไทย</small></div></div>
         <nav>
           <p>เมนูหลัก</p>
           {navigation.filter((item) => !item.admin || role === "admin").map(({href, label, icon: Icon}) => (

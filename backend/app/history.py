@@ -94,7 +94,7 @@ class HistoryImportManager:
                     "history_imports",
                     columns="race_cd",
                     filters={
-                        "status": "in.(pending,error)",
+                        "status": "eq.pending",
                         "scheduled_for": f"lte.{datetime.now(UTC).isoformat()}",
                     },
                     limit=10,

@@ -95,7 +95,8 @@ export default function PublicTelemetryPage() {
     [matchCd, modeRaces],
   );
   const races = useMemo(() => modeRaces.filter((item) =>
-    (!matchCd || item.match_cd === matchCd) && (!levelCd || item.level_cd === levelCd)),
+    (!matchCd || item.match_cd === matchCd) && (!levelCd || item.level_cd === levelCd))
+    .sort((a, b) => ({50: 0, 10: 1, 99: 2}[a.sailfish_status] ?? 3) - ({50: 0, 10: 1, 99: 2}[b.sailfish_status] ?? 3)),
   [levelCd, matchCd, modeRaces]);
 
   useEffect(() => {
@@ -184,7 +185,7 @@ export default function PublicTelemetryPage() {
   return (
     <main className="public-shell">
       <header className="public-header">
-        <div className="public-brand"><span><Wind/></span><div><b>SailFish</b><small>ข้อมูลการแข่งขันสำหรับบุคคลทั่วไป</small></div></div>
+        <div className="public-brand"><span><Wind/></span><div><b>SailFish</b><small>สมาคมเรือใบแห่งประเทศไทย · ข้อมูลสาธารณะ</small></div></div>
         <div className="public-live-badge"><i/>{mode === "live" ? "การแข่งขันสด" : "ผลการแข่งขันย้อนหลัง"}</div>
       </header>
       <section className="public-hero">
@@ -208,13 +209,16 @@ export default function PublicTelemetryPage() {
           <div><small>{data.race.match_name}</small><h2>{data.race.class_name} · {data.race.rounds}</h2><span>{data.race.race_name}</span></div>
           <div><b>{data.athletes.length}</b><small>นักกีฬา</small></div>
         </section>
-        <section className="public-metrics">
+        {(mode === "history" || data.race.status === "50") && <section className="public-metrics">
           <Metric icon={<Wind/>} label="ความเร็วลม" value={`${number(data.wind?.speed_knots)} นอต`} sub={bangkokTime(data.wind?.captured_at_ms)}/>
           <Metric icon={<Compass/>} label="ทิศที่ลมพัดมา" value={`${number(data.wind?.direction_degree, 0)}°`} sub={directionName(data.wind?.direction_degree)}/>
           <Metric icon={<Activity/>} label="สถานะข้อมูล" value={freshness(data.wind?.updated_at).label} sub={mode === "live" ? "อัปเดตทุก 2 วินาที" : "ข้อมูลสุดท้ายของรอบ"}/>
-        </section>
+        </section>}
 
-        {mode === "live" ? <>
+        {mode === "live" && data.race.status !== "50" ? <section className="public-waiting-card">
+          <Anchor/><h3>{data.race.status === "10" ? "รอเริ่มการแข่งขัน" : "รอรอบถัดไป"}</h3>
+          <p>{data.race.status === "10" ? `${data.race.class_name} · ${data.race.rounds || "รอบที่กำลังเตรียม"}` : "การแข่งขันรอบนี้จบแล้ว ข้อมูลสดถูกปิดจนกว่าจะมีรอบใหม่"}</p>
+        </section> : mode === "live" ? <>
           <section className="public-wind-card">
             <div className="public-card-title"><h3>ตารางลมและทิศ</h3><div className="time-filter">
               {windWindowOptions.map(([value, label]) => <button className={windWindow === value ? "active" : ""} key={value} onClick={() => setWindWindow(value)}>{label}</button>)}

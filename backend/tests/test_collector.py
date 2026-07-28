@@ -94,6 +94,7 @@ async def test_confirmed_status_lifecycle_and_event_deduplication() -> None:
     assert ("race-1", "sailfish_finished") in repository.events
     assert len(repository.events) == 2
     assert len(finished) == 1
+    assert repository.race_updates[-1]["values"]["collection_enabled"] is False
 
     await collector._apply_sailfish_status(
         {"status": "99", "endTime": "1785248840000"}, source="test"

@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class CollectorState(StrEnum):
@@ -30,6 +30,21 @@ class RaceSyncRequest(BaseModel):
 class RaceClassVisibilityRequest(BaseModel):
     public_live_enabled: bool
     public_history_enabled: bool
+
+
+class MatchVisibilityRequest(BaseModel):
+    is_public: bool
+
+
+class HistoryBatchRequest(BaseModel):
+    race_cds: list[str] = Field(min_length=1, max_length=100)
+
+    @field_validator("race_cds")
+    @classmethod
+    def validate_race_codes(cls, values: list[str]) -> list[str]:
+        if any(not value or len(value) > 128 or not value.replace("-", "").replace("_", "").isalnum() for value in values):
+            raise ValueError("race_cds contains an invalid identifier")
+        return values
 
 
 class CollectorStatus(BaseModel):

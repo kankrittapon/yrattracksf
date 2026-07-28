@@ -15,6 +15,8 @@ from .sailfish import SailfishClient
 from .schemas import (
     ArmRequest,
     CollectorStatus,
+    HistoryBatchRequest,
+    MatchVisibilityRequest,
     OverrideRequest,
     Principal,
     RaceClassVisibilityRequest,
@@ -50,6 +52,9 @@ async def _persist_races(repository: Repository, races: list[dict[str, Any]]) ->
         [{
             "match_cd": match_cd,
             "name": first.get("matchName") or match_cd,
+            "starts_at": _timestamp_iso(first.get("matchStart")),
+            "ends_at": _timestamp_iso(first.get("matchEnd")),
+            "synced_at": datetime.now(UTC).isoformat(),
             "raw_metadata": {"source": "admin_sync"},
         }],
         "match_cd",
@@ -80,7 +85,6 @@ async def _persist_races(repository: Repository, races: list[dict[str, Any]]) ->
             "start_at": _timestamp_iso(race.get("startTime")),
             "end_at": _timestamp_iso(race.get("endTime")),
             "raw_metadata": {"source": "admin_sync"},
-            "tracked_at": datetime.now(UTC).isoformat(),
             "updated_at": datetime.now(UTC).isoformat(),
         })
     await repository.upsert("race_classes", list(classes.values()), "level_cd")
@@ -95,16 +99,11 @@ async def lifespan(app: FastAPI):
     app.state.sailfish = sailfish
     app.state.history = HistoryImportManager(settings, sailfish, repository)
     await app.state.history.start()
-    app.state.collectors = CollectorManager(
-        settings,
-        sailfish,
-        repository,
-        app.state.history.schedule_after_finish,
-    )
+    app.state.collectors = CollectorManager(settings, sailfish, repository)
     active_races = await repository.select(
         "races",
         columns="race_cd",
-        filters={"sailfish_status": "eq.50", "tracked_at": "not.is.null"},
+        filters={"sailfish_status": "eq.50", "collection_enabled": "eq.true"},
     )
     for race in active_races:
         await app.state.collectors.get_or_create(str(race["race_cd"])).arm()
@@ -151,25 +150,14 @@ async def sync_races(body: RaceSyncRequest, principal: Principal = Depends(requi
     waiting = [race for race in merged if str(race.get("status") or "") == "10"]
     finished = [race for race in merged if str(race.get("status") or "") == "99"]
     await _persist_races(app.state.repository, merged)
-    collectors = []
-    for race in active:
-        race_cd = str(race["raceCd"])
-        collectors.append(
-            (await app.state.collectors.get_or_create(race_cd).arm()).model_dump(mode="json")
-        )
-    history_imports = []
-    for race in finished:
-        history_imports.append(
-            await app.state.history.schedule_after_finish(str(race["raceCd"]), race)
-        )
     await app.state.repository.audit(principal.user_id, "races.sync", None, body.match_cd)
     return {
         "items": merged,
         "active": active,
         "waiting": waiting,
         "finished": finished,
-        "collectors": collectors,
-        "history_imports": history_imports,
+        "collectors": [],
+        "history_imports": [],
     }
 
 
@@ -195,13 +183,69 @@ async def get_history_import(race_cd: str, principal: Principal = Depends(requir
 @app.post("/history-imports/{race_cd}/retry", dependencies=[Depends(control_rate_limit)])
 async def retry_history_import(race_cd: str, principal: Principal = Depends(require_admin)):
     races = await app.state.repository.select(
-        "races", columns="race_cd", filters={"race_cd": f"eq.{race_cd}"}, limit=1
+        "races", columns="race_cd,sailfish_status", filters={"race_cd": f"eq.{race_cd}"}, limit=1
     )
     if not races:
         raise HTTPException(status_code=404, detail="Race not found")
+    if str(races[0].get("sailfish_status") or "") != "99":
+        raise HTTPException(status_code=409, detail="Race is not finished")
     await app.state.history.retry_now(race_cd)
     await app.state.repository.audit(principal.user_id, "history.retry", race_cd, None)
     return {"race_cd": race_cd, "status": "pending"}
+
+
+@app.post("/history-imports/batch", dependencies=[Depends(control_rate_limit)])
+async def batch_history_import(
+    body: HistoryBatchRequest,
+    principal: Principal = Depends(require_admin),
+):
+    unique_codes = list(dict.fromkeys(body.race_cds))
+    races = await app.state.repository.select(
+        "races",
+        columns="race_cd,sailfish_status",
+        filters={"race_cd": f"in.({','.join(unique_codes)})"},
+        limit=100,
+    )
+    by_code = {str(item["race_cd"]): item for item in races}
+    accepted: list[str] = []
+    skipped: list[dict[str, str]] = []
+    for race_cd in unique_codes:
+        race = by_code.get(race_cd)
+        if not race:
+            skipped.append({"race_cd": race_cd, "reason": "ไม่พบรอบการแข่งขัน"})
+        elif str(race.get("sailfish_status") or "") != "99":
+            skipped.append({"race_cd": race_cd, "reason": "การแข่งขันยังไม่จบ"})
+        else:
+            await app.state.history.retry_now(race_cd)
+            accepted.append(race_cd)
+    await app.state.repository.audit(
+        principal.user_id,
+        "history.batch",
+        None,
+        f"accepted={len(accepted)},skipped={len(skipped)}",
+    )
+    return {"accepted": accepted, "skipped": skipped}
+
+
+@app.post("/matches/{match_cd}/visibility", dependencies=[Depends(control_rate_limit)])
+async def set_match_visibility(
+    match_cd: str,
+    body: MatchVisibilityRequest,
+    principal: Principal = Depends(require_admin),
+):
+    rows = await app.state.repository.select(
+        "matches", columns="match_cd", filters={"match_cd": f"eq.{match_cd}"}, limit=1
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Match not found")
+    await app.state.repository.update("matches", {"is_public": body.is_public}, {"match_cd": match_cd})
+    await app.state.repository.audit(
+        principal.user_id,
+        "match.visibility",
+        None,
+        f"{match_cd}:public={body.is_public}",
+    )
+    return {"match_cd": match_cd, "is_public": body.is_public}
 
 
 @app.post("/race-classes/{level_cd}/visibility", dependencies=[Depends(control_rate_limit)])
@@ -245,6 +289,11 @@ async def get_collector(race_cd: str, principal: Principal = Depends(require_adm
 @app.post("/collectors/{race_cd}/arm", response_model=CollectorStatus, dependencies=[Depends(control_rate_limit)])
 async def arm_collector(race_cd: str, body: ArmRequest, principal: Principal = Depends(require_admin)):
     collector = app.state.collectors.get_or_create(race_cd)
+    await app.state.repository.update(
+        "races",
+        {"collection_enabled": True, "tracked_at": datetime.now(UTC).isoformat()},
+        {"race_cd": race_cd},
+    )
     await app.state.repository.audit(principal.user_id, "collector.arm", race_cd, body.reason)
     return await collector.arm()
 
@@ -267,6 +316,9 @@ async def stop_collector(race_cd: str, body: OverrideRequest, principal: Princip
     collector = app.state.collectors.collectors.get(race_cd)
     if not collector:
         raise HTTPException(status_code=404, detail="Collector not found")
+    await app.state.repository.update(
+        "races", {"collection_enabled": False}, {"race_cd": race_cd}
+    )
     await app.state.repository.audit(principal.user_id, "collector.stop", race_cd, body.reason)
     return await collector.stop()
 
@@ -275,6 +327,11 @@ async def stop_collector(race_cd: str, body: OverrideRequest, principal: Princip
 async def retry_collector(race_cd: str, body: ArmRequest, principal: Principal = Depends(require_admin)):
     collector = app.state.collectors.get_or_create(race_cd)
     await collector.stop()
+    await app.state.repository.update(
+        "races",
+        {"collection_enabled": True, "tracked_at": datetime.now(UTC).isoformat()},
+        {"race_cd": race_cd},
+    )
     await app.state.repository.audit(principal.user_id, "collector.retry", race_cd, body.reason)
     return await collector.arm()
 

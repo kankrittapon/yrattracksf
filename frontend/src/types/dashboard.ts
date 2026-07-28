@@ -12,9 +12,19 @@ export interface Race {
   start_at: string | null;
   end_at: string | null;
   history_imported_at: string | null;
+  collection_enabled: boolean;
   updated_at: string;
   match?: {name: string} | null;
   race_class?: {name: string} | null;
+}
+
+export interface Match {
+  match_cd: string;
+  name: string;
+  starts_at: string | null;
+  ends_at: string | null;
+  is_public: boolean;
+  synced_at: string;
 }
 
 export interface RaceClass {

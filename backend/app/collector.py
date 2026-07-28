@@ -357,16 +357,15 @@ class RaceCollector:
         self.status.sailfish_status = sailfish_status
         self.status.last_error = None
 
-        await self.repository.update(
-            "races",
-            {
-                "sailfish_status": sailfish_status,
-                "start_at": _timestamp_iso(race.get("startTime")),
-                "end_at": _timestamp_iso(race.get("endTime")),
-                "updated_at": observed_at.isoformat(),
-            },
-            {"race_cd": self.race_cd},
-        )
+        race_values = {
+            "sailfish_status": sailfish_status,
+            "start_at": _timestamp_iso(race.get("startTime")),
+            "end_at": _timestamp_iso(race.get("endTime")),
+            "updated_at": observed_at.isoformat(),
+        }
+        if sailfish_status == SAILFISH_FINISHED_STATUS:
+            race_values["collection_enabled"] = False
+        await self.repository.update("races", race_values, {"race_cd": self.race_cd})
 
         if sailfish_status == SAILFISH_WAITING_STATUS:
             if not self._force_recording:
@@ -430,6 +429,25 @@ class RaceCollector:
                 await self._persist_status()
             elif any(item in value.upper() for item in ("FINISH", "END")):
                 self.status.state = CollectorState.FINISHING
+                self.status.sailfish_status = SAILFISH_FINISHED_STATUS
+                self.status.phase_source = "race_control"
+                await self.repository.update(
+                    "races",
+                    {
+                        "sailfish_status": SAILFISH_FINISHED_STATUS,
+                        "end_at": now.isoformat(),
+                        "collection_enabled": False,
+                        "updated_at": now.isoformat(),
+                    },
+                    {"race_cd": self.race_cd},
+                )
+                await self.repository.store_race_event_once(
+                    self.race_cd,
+                    "race_control_finished",
+                    now,
+                    "finishing",
+                    {"value": value, "source": "race_control"},
+                )
                 self._stop.set()
                 await self._persist_status()
             return

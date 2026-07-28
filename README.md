@@ -64,17 +64,17 @@ Extension และ Userscript ไม่ต้องเปิดค้างไ�
 | `/login` | เข้าสู่ระบบ | ทุกคน | Login ด้วย Supabase Auth |
 | `/overview` | ภาพรวมการแข่งขัน | Viewer/Admin | รอบที่กำลังใช้งาน ลมล่าสุด จำนวนนักกีฬา และสถานะ Collector |
 | `/live` | การแข่งขันสด | Viewer/Admin | แผนที่ ตารางลม และตารางทิศของนักกีฬา |
-| `/history` | ผลการแข่งขันย้อนหลัง | Viewer/Admin | เลือกรายการ ประเภท รอบ นักกีฬา และเล่นข้อมูลย้อนหลัง |
+| `/history` | ผลการแข่งขันย้อนหลัง | Viewer/Admin | เลือกรายการ/ประเภท/รอบ, สั่งนำเข้ารายรอบหรือหลายรอบ และเล่นข้อมูลย้อนหลัง |
 | `/compare` | เปรียบเทียบนักกีฬา | Viewer/Admin | เปรียบเทียบ SOG, COG, มุมเทียบลม และ VMG |
-| `/control` | ควบคุมการเก็บข้อมูล | Admin | ค้นหารายการ Sync รอบ Arm/Start/Stop/Retry และนำเข้าประวัติ |
+| `/control` | ควบคุมการเก็บข้อมูล | Admin | เลือกรายการ, Sync หารอบใหม่, Filter ประเภท และ Arm/Start/Stop/Retry รายรอบ |
 | `/quality` | ตรวจสอบคุณภาพข้อมูล | Admin | ข้อมูลล่าช้า ข้อมูลขาด reconnect decoder error และอุปกรณ์ซ้ำ |
-| `/settings` | ตั้งค่าระบบ | Admin | อนุญาต/ไม่อนุญาต Live และ History สำหรับแต่ละประเภทเรือ |
+| `/settings` | ตั้งค่าระบบ | Admin | เปิดหรือปิด Public ระดับรายการ และดูสถานะประเภท/รอบ |
 
 ### หน้าสาธารณะ
 
 | URL | การเข้าถึง | หน้าที่ |
 |---|---|---|
-| `/public` | ไม่ต้อง Login | ดูเฉพาะประเภทเรือที่ Admin อนุญาต โดยไม่มีพิกัดเรือ |
+| `/public` | ไม่ต้อง Login | ดูทุกประเภทในรายการที่ Admin เปิด Public โดยไม่มีพิกัดเรือ |
 
 หน้า Live ทั้งแบบสมาชิกและสาธารณะมีสองตาราง:
 
@@ -95,13 +95,13 @@ Extension และ Userscript ไม่ต้องเปิดค้างไ�
 1. Admin เปิดหน้า **ควบคุมการเก็บข้อมูล**
 2. กดค้นหารายการจาก SailFish
 3. เลือกรายการแล้วกด Sync รอบการแข่งขัน
-4. Backend บันทึกรอบทุกสถานะลง Supabase
+4. Backend บันทึกรอบทุกสถานะลง Supabase โดยยังไม่เริ่มเก็บข้อมูล
 5. รอบสถานะ `10` แสดงเป็น **รอเริ่มการแข่งขัน**
 6. เมื่อเจ้าของสนามกด Start ใน SailFish แล้ว Admin กดตรวจสถานะอีกครั้ง
-7. รอบสถานะ `50` แสดงเป็น **กำลังแข่งขัน** และ Collector เริ่มเก็บข้อมูล
+7. Admin กดเตรียมเก็บในรอบที่ต้องการ; รอบสถานะ `50` จึงแสดงเป็น **กำลังแข่งขัน** และ Collector เก็บข้อมูล
 8. รอบสถานะ `99` แสดงเป็น **จบการแข่งขันแล้ว**
-9. ระบบกำหนดนำเข้าข้อมูลย้อนหลังหลังจบประมาณ 90 นาที หรือ Admin กดนำเข้าทันที
-10. เมื่อ import สำเร็จ รอบจึงพร้อมแสดงใน History ตามสิทธิ์ที่กำหนด
+9. Admin ไปหน้า History เลือกรอบเดียวหรือหลายรอบที่จบแล้วและสั่งนำเข้า
+10. เมื่อ import สำเร็จ รอบจึงพร้อมแสดงใน History; ระบบไม่นำเข้าอัตโนมัติหลัง Finish
 
 Collector มีสถานะ:
 
@@ -117,7 +117,7 @@ subscribe ใหม่ และใช้ unique keys ป้องกันข�
 ### Metadata
 
 - `matches` — รายการการแข่งขัน
-- `race_classes` — ประเภทเรือและสิทธิ์เผยแพร่
+- `race_classes` — ประเภทเรือ
 - `races` — รอบการแข่งขัน
 - `teams` — นักกีฬา/ทีม/เลขใบเรือ
 - `devices` — อุปกรณ์
@@ -191,7 +191,7 @@ request body หรือ Authorization header; explicit log-redaction middlewar
 |---|---|---|
 | GET | `/health` | ตรวจว่า Backend ทำงาน |
 | GET | `/races/discover` | ค้นหารายการแข่งขันจาก SailFish |
-| POST | `/races/sync` | Sync รอบทุกสถานะและเริ่ม Collector สำหรับรอบ Live |
+| POST | `/races/sync` | Sync metadata ของทุกรอบโดยไม่เริ่ม Collector |
 | GET | `/collectors` | ดู Collector ทั้งหมดในหน่วยความจำ |
 | GET | `/collectors/{raceCd}` | ดู Collector ของรอบ |
 | POST | `/collectors/{raceCd}/arm` | เตรียมเก็บข้อมูล |
@@ -201,7 +201,9 @@ request body หรือ Authorization header; explicit log-redaction middlewar
 | GET | `/history-imports` | ดูงานนำเข้าประวัติ |
 | GET | `/history-imports/{raceCd}` | ดูงานนำเข้าของรอบ |
 | POST | `/history-imports/{raceCd}/retry` | นำเข้าประวัติทันที |
-| POST | `/race-classes/{levelCd}/visibility` | ตั้งสิทธิ์ Live/History สาธารณะ |
+| POST | `/history-imports/batch` | นำเข้าหลายรอบตามคิว |
+| POST | `/matches/{matchCd}/visibility` | เปิดหรือปิด Public ทั้งรายการ |
+| POST | `/race-classes/{levelCd}/visibility` | API เดิมเพื่อ compatibility; UI ใหม่ไม่ใช้ |
 | GET | `/diagnostics/{raceCd}` | ดูข้อมูลวินิจฉัย |
 
 ## Supabase migrations
@@ -214,7 +216,9 @@ request body หรือ Authorization header; explicit log-redaction middlewar
    - `history_imports` และ RPC สำหรับหน้าสาธารณะ/History
 3. `supabase/migrations/202607290001_public_wind_history.sql`
    - RPC ตารางลมสาธารณะช่วงเวลาจริง/3/5/10 นาที
-4. `supabase/cleanup.sql`
+4. `supabase/migrations/202607290002_match_control_and_public.sql`
+   - การเลือกเก็บรายรอบ, Public ระดับรายการ และกติกาหยุด Live หลัง Finish
+5. `supabase/cleanup.sql`
    - pg_cron ลบ raw payload ที่หมดอายุ
 
 Supabase ต้องเปิด extension `pg_cron` ก่อนรัน cleanup
@@ -240,7 +244,7 @@ Supabase ต้องเปิด extension `pg_cron` ก่อนรัน clea
 | `SAILFISH_LIVE_TOKEN` | token Live ชั่วคราวเมื่อค้นจาก response ไม่ได้ |
 | `TOKEN_ENCRYPTION_KEY` | สำรองไว้สำหรับการเก็บ token แบบเข้ารหัส; โค้ดปัจจุบันยังไม่ใช้ |
 | `RACE_STATUS_POLL_SECONDS` | รอบตรวจสถานะ SailFish |
-| `HISTORY_IMPORT_DELAY_MINUTES` | เวลารอก่อนนำเข้าประวัติ |
+| `HISTORY_IMPORT_DELAY_MINUTES` | ค่าเดิมเพื่อ compatibility; การนำเข้าใหม่รอคำสั่ง Admin |
 | `HISTORY_IMPORT_RETRY_MINUTES` | เวลารอก่อนลอง import ใหม่ |
 | `HISTORY_SCHEDULER_INTERVAL_SECONDS` | รอบทำงานของ scheduler |
 | `RAW_RETENTION_DAYS` | จำนวนวันที่เก็บ raw payload |

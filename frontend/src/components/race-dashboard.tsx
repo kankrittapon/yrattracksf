@@ -10,7 +10,7 @@ import {
 import {createClient} from "@/lib/supabase/client";
 import {bangkokTime, directionName, freshness, number} from "@/lib/format";
 import type {
-  AthleteState, Collector, HistoryImport, Race, RaceClass, Section, Team, WindState,
+  AthleteState, Collector, HistoryImport, Match, Race, RaceClass, Section, Team, WindState,
 } from "@/types/dashboard";
 
 interface QualityEvent {
@@ -180,6 +180,16 @@ export function RaceDashboard({section}: {section: Section}) {
   const teamMap = useMemo(() => new Map(teams.map((team) => [team.team_cd, team])), [teams]);
   const liveCount = athletes.filter((item) => freshness(item.updated_at).className === "live").length;
 
+  if (section === "control") {
+    return <><SectionHeading section={section}/><MatchControlWorkspace/></>;
+  }
+  if (section === "history") {
+    return <><SectionHeading section={section}/><HistoryWorkspace/></>;
+  }
+  if (section === "settings") {
+    return <><SectionHeading section={section}/><PublishingWorkspace/></>;
+  }
+
   async function control(action: "arm" | "start-override" | "stop" | "retry") {
     setNotice("กำลังเชื่อมต่อ ai-brain ผ่าน Tailscale…");
     const api = process.env.NEXT_PUBLIC_CONTROL_API_URL;
@@ -234,17 +244,7 @@ export function RaceDashboard({section}: {section: Section}) {
       <div className="page-heading">
         <div><p className="eyebrow">ข้อมูลการแข่งขัน SAILFISH</p><h1>{titles[section][0]}</h1><span>{titles[section][1]}</span></div>
         <div className="race-picker">
-          <label>{section === "history" ? "เลือกรอบย้อนหลัง" : section === "control" || section === "settings" ? "เลือกรอบการแข่งขัน" : "เลือกรอบที่กำลังแข่ง"}</label>
-          {section === "history" && <div className="history-filter-row">
-            <select value={matchFilter} onChange={(event) => {setMatchFilter(event.target.value); setClassFilter("");}}>
-              <option value="">ทุกรายการแข่งขัน</option>
-              {matchOptions.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
-            </select>
-            <select value={classFilter} onChange={(event) => setClassFilter(event.target.value)}>
-              <option value="">ทุกประเภทเรือ</option>
-              {classOptions.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
-            </select>
-          </div>}
+          <label>เลือกรอบที่กำลังแข่ง</label>
           <select value={raceCd} onChange={(event) => setRaceCd(event.target.value)}>
             {!visibleRaces.length && <option value="">ยังไม่มีการแข่งขัน</option>}
             {visibleRaces.map((item) => <option value={item.race_cd} key={item.race_cd}>{item.name || item.race_cd} · {item.rounds || "—"} · {raceStatusLabel[item.sailfish_status || ""] || "ไม่ทราบสถานะ"}</option>)}
@@ -253,23 +253,325 @@ export function RaceDashboard({section}: {section: Section}) {
         </div>
       </div>
 
-      {loading ? <LoadingState/> : !race ? (
-        section === "control"
-          ? <CollectorSetup races={races} onSynced={() => void load()}/>
-          : <EmptyState/>
-      ) : (
+      {loading ? <LoadingState/> : !race ? <EmptyState/> : (
         <>
           {section === "overview" && <Overview race={race} collector={collector} wind={wind} athletes={athletes} liveCount={liveCount} teamMap={teamMap}/>}
           {section === "live" && <LiveRace race={race} collector={collector} wind={wind} athletes={athletes} teamMap={teamMap}/>}
-          {section === "history" && <History race={race} teams={teams} role={role}/>}
           {section === "compare" && <Compare athletes={athletes} teamMap={teamMap}/>}
-          {section === "control" && <><CollectorSetup races={races} onSynced={() => void load()}/><Control collector={collector} race={race} notice={notice} historyImport={historyImport} onControl={control} onImportHistory={importHistoryNow}/></>}
           {section === "quality" && <Quality collector={collector} quality={quality} athletes={athletes} teams={teams}/>}
-          {section === "settings" && <SettingsPanel race={race} wind={wind} role={role}/>}
         </>
       )}
     </>
   );
+}
+
+function SectionHeading({section}: {section: Section}) {
+  return <div className="page-heading">
+    <div><p className="eyebrow">ข้อมูลการแข่งขัน SAILFISH</p><h1>{titles[section][0]}</h1><span>{titles[section][1]}</span></div>
+  </div>;
+}
+
+async function adminRequest(path: string, init?: RequestInit) {
+  const api = process.env.NEXT_PUBLIC_CONTROL_API_URL;
+  if (!api) throw new Error("ยังไม่ได้ตั้งค่าที่อยู่ระบบควบคุม");
+  const supabase = createClient();
+  const {data: {session}} = await supabase.auth.getSession();
+  if (!session) throw new Error("การเข้าสู่ระบบหมดอายุ กรุณาเข้าสู่ระบบใหม่");
+  const response = await fetch(`${api.replace(/\/$/, "")}${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+      "Content-Type": "application/json",
+      ...(init?.headers || {}),
+    },
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+interface WorkspaceData {
+  matches: Match[];
+  races: Race[];
+  collectors: Collector[];
+  imports: HistoryImport[];
+  role: string;
+}
+
+async function loadWorkspaceData(): Promise<WorkspaceData> {
+  const supabase = createClient();
+  const {data: {user}} = await supabase.auth.getUser();
+  const [matches, races, collectors, imports, profile] = await Promise.all([
+    supabase.from("matches").select("*").order("synced_at", {ascending: false}),
+    supabase.from("races").select("*,match:matches(name),race_class:race_classes(name)").order("updated_at", {ascending: false}),
+    supabase.from("collector_status").select("*"),
+    supabase.from("history_imports").select("*").order("updated_at", {ascending: false}),
+    user ? supabase.from("profiles").select("role").eq("id", user.id).maybeSingle() : Promise.resolve({data: null}),
+  ]);
+  return {
+    matches: (matches.data || []) as Match[],
+    races: (races.data || []) as unknown as Race[],
+    collectors: (collectors.data || []) as Collector[],
+    imports: (imports.data || []) as HistoryImport[],
+    role: profile.data?.role || "viewer",
+  };
+}
+
+function classNameOf(race: Race) {
+  return race.race_class?.name || race.name || race.level_cd || "ไม่ระบุประเภท";
+}
+
+function MatchControlWorkspace() {
+  const [data, setData] = useState<WorkspaceData>({matches: [], races: [], collectors: [], imports: [], role: "viewer"});
+  const [discovered, setDiscovered] = useState<SailFishMatch[]>([]);
+  const [matchCd, setMatchCd] = useState("");
+  const [classFilter, setClassFilter] = useState("");
+  const [busy, setBusy] = useState("");
+  const [notice, setNotice] = useState("เลือกหรือค้นหารายการแข่งขัน แล้ว Sync เพื่อดูประเภทเรือและรอบทั้งหมด");
+  const [newRaces, setNewRaces] = useState<Set<string>>(new Set());
+
+  const reload = useCallback(async () => {
+    const next = await loadWorkspaceData();
+    setData(next);
+    setMatchCd((current) => {
+      const saved = typeof window !== "undefined" ? window.localStorage.getItem("sailfish-control-match") : "";
+      return next.matches.some((item) => item.match_cd === current) ? current
+        : next.matches.some((item) => item.match_cd === saved) ? saved!
+        : next.matches[0]?.match_cd || current;
+    });
+  }, []);
+  useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => {
+    const timer = window.setInterval(() => void reload(), 5000);
+    return () => window.clearInterval(timer);
+  }, [reload]);
+  useEffect(() => {
+    if (matchCd) window.localStorage.setItem("sailfish-control-match", matchCd);
+    setClassFilter("");
+  }, [matchCd]);
+
+  const options = useMemo(() => {
+    const map = new Map(data.matches.map((item) => [item.match_cd, item.name]));
+    discovered.forEach((item) => map.set(item.matchCd, item.matchName || item.matchCd));
+    return [...map.entries()];
+  }, [data.matches, discovered]);
+  const matchRaces = data.races.filter((item) => item.match_cd === matchCd);
+  const classOptions = [...new Map(matchRaces.map((item) => [item.level_cd || "", classNameOf(item)])).entries()];
+  const visible = matchRaces.filter((item) => !classFilter || item.level_cd === classFilter);
+  const groups = [...new Map(visible.map((item) => [item.level_cd || "", classNameOf(item)])).entries()];
+  const collectorMap = new Map(data.collectors.map((item) => [item.race_cd, item]));
+
+  async function discoverMatches() {
+    setBusy("discover");
+    try {
+      const body = await adminRequest("/races/discover");
+      const items = (body.items || []) as SailFishMatch[];
+      setDiscovered(items);
+      if (!matchCd) setMatchCd(items[0]?.matchCd || "");
+      setNotice(items.length ? `พบ ${items.length} รายการแข่งขัน` : "ไม่พบรายการแข่งขันในบัญชี SailFish");
+    } catch (error) {
+      setNotice(`ค้นหาไม่สำเร็จ — ${String(error)}`);
+    } finally { setBusy(""); }
+  }
+
+  async function syncMatch() {
+    if (!matchCd) return;
+    setBusy("sync");
+    const before = new Set(matchRaces.map((item) => item.race_cd));
+    try {
+      const body = await adminRequest("/races/sync", {method: "POST", body: JSON.stringify({match_cd: matchCd})});
+      const incoming = (body.items || []) as Array<{raceCd: string}>;
+      setNewRaces(new Set(incoming.filter((item) => !before.has(item.raceCd)).map((item) => item.raceCd)));
+      setNotice(`อัปเดตแล้ว ${incoming.length} รอบ · รอเริ่ม ${body.waiting?.length || 0} · กำลังแข่ง ${body.active?.length || 0} · จบแล้ว ${body.finished?.length || 0}`);
+      await reload();
+    } catch (error) {
+      setNotice(`Sync ไม่สำเร็จ — ${String(error)}`);
+    } finally { setBusy(""); }
+  }
+
+  async function roundAction(race: Race, action: "arm" | "start-override" | "stop" | "retry") {
+    const needsReason = action === "start-override" || action === "stop";
+    const reason = needsReason ? window.prompt("กรุณาระบุเหตุผล", "") || "" : "สั่งงานจากหน้าควบคุม";
+    if (needsReason && reason.length < 3) return setNotice("ต้องระบุเหตุผลอย่างน้อย 3 ตัวอักษร");
+    setBusy(race.race_cd);
+    try {
+      await adminRequest(`/collectors/${race.race_cd}/${action}`, {method: "POST", body: JSON.stringify({reason})});
+      setNotice(`${actionName[action]} ${classNameOf(race)} ${race.rounds || ""} สำเร็จ`);
+      await reload();
+    } catch (error) {
+      setNotice(`สั่งงานไม่สำเร็จ — ${String(error)}`);
+    } finally { setBusy(""); }
+  }
+
+  return <div className="match-workspace">
+    <section className="panel match-toolbar">
+      <div className="control-lock"><LockKeyhole/><div><b>ควบคุมผ่าน TAILSCALE</b><span>เลือกรายการแข่งขันก่อน แล้วจัดการแต่ละรอบแยกกัน</span></div></div>
+      <div className="match-picker-row">
+        <label>รายการแข่งขัน<select value={matchCd} onChange={(event) => setMatchCd(event.target.value)}>
+          {!options.length && <option value="">ยังไม่มีรายการ</option>}
+          {options.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+        </select></label>
+        <button disabled={Boolean(busy)} onClick={discoverMatches}><Database/> ค้นหารายการ</button>
+        <button className="primary-match-action" disabled={Boolean(busy) || !matchCd} onClick={syncMatch}><RefreshCw/> {busy === "sync" ? "กำลัง Sync…" : matchRaces.length ? "Sync หารอบใหม่" : "นำเข้ารายการ"}</button>
+      </div>
+      <div className="control-notice">{notice}</div>
+    </section>
+    {matchRaces.length > 0 && <>
+      <div className="match-summary">
+        <Metric label="ประเภทเรือ" value={String(classOptions.length)} sub="ประเภท" icon={<LayersIcon/>}/>
+        <Metric label="รอบทั้งหมด" value={String(matchRaces.length)} sub="รอบ" icon={<Database/>}/>
+        <Metric label="รอเริ่ม" value={String(matchRaces.filter((item) => item.sailfish_status === "10").length)} sub="รอบ" icon={<Clock3/>}/>
+        <Metric label="กำลังแข่งขัน" value={String(matchRaces.filter((item) => item.sailfish_status === "50").length)} sub="รอบ" icon={<Radio/>}/>
+      </div>
+      <div className="class-filter">
+        <button className={!classFilter ? "active" : ""} onClick={() => setClassFilter("")}>ทุกประเภท ({matchRaces.length})</button>
+        {classOptions.map(([value, label]) => <button className={classFilter === value ? "active" : ""} key={value} onClick={() => setClassFilter(value)}>{label} ({matchRaces.filter((item) => item.level_cd === value).length})</button>)}
+      </div>
+      {groups.map(([levelCd, label]) => <section className="panel class-race-group" key={levelCd}>
+        <PanelTitle icon={<Users/>} title={label} meta={<span>{visible.filter((item) => (item.level_cd || "") === levelCd).length} รอบ</span>}/>
+        {visible.filter((item) => (item.level_cd || "") === levelCd).map((race) => {
+          const status = collectorMap.get(race.race_cd);
+          const running = race.collection_enabled || Boolean(status && !["idle", "completed", "error"].includes(status.state));
+          return <div className="round-control-row" key={race.race_cd}>
+            <div><b>{race.rounds || race.name || "ไม่ระบุรอบ"}</b><span>{raceStatusLabel[race.sailfish_status || ""] || "ไม่ทราบสถานะ"} · {bangkokTime(race.start_at)}</span></div>
+            <div className="round-badges">{newRaces.has(race.race_cd) && <i className="new-badge">รอบใหม่</i>}<i className={`race-status status-${race.sailfish_status}`}>{collectorState[status?.state || "idle"]}</i></div>
+            <div className="round-actions">
+              {race.sailfish_status !== "99" && !running && <button disabled={busy === race.race_cd} onClick={() => roundAction(race, "arm")}><Radio/> เตรียมเก็บข้อมูล</button>}
+              {running && <><button onClick={() => roundAction(race, "start-override")}><Play/> เริ่มด้วยตนเอง</button><button onClick={() => roundAction(race, "retry")}><RefreshCw/> ลองใหม่</button><button className="danger" onClick={() => roundAction(race, "stop")}><Square/> หยุด</button></>}
+              {race.sailfish_status === "99" && <span className="finished-copy">ไปหน้า “ผลย้อนหลัง” เพื่อนำเข้าข้อมูล</span>}
+            </div>
+          </div>;
+        })}
+      </section>)}
+    </>}
+  </div>;
+}
+
+function LayersIcon() {
+  return <span aria-hidden="true">▦</span>;
+}
+
+function HistoryWorkspace() {
+  const [data, setData] = useState<WorkspaceData>({matches: [], races: [], collectors: [], imports: [], role: "viewer"});
+  const [matchCd, setMatchCd] = useState("");
+  const [classFilter, setClassFilter] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [viewRaceCd, setViewRaceCd] = useState("");
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState(false);
+  const reload = useCallback(async () => {
+    const next = await loadWorkspaceData();
+    setData(next);
+    setMatchCd((current) => next.matches.some((item) => item.match_cd === current) ? current : next.matches[0]?.match_cd || "");
+  }, []);
+  useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => {
+    const timer = window.setInterval(() => void reload(), 5000);
+    return () => window.clearInterval(timer);
+  }, [reload]);
+  const finished = data.races.filter((item) => item.match_cd === matchCd && item.sailfish_status === "99");
+  const classes = [...new Map(finished.map((item) => [item.level_cd || "", classNameOf(item)])).entries()];
+  const visible = finished.filter((item) => !classFilter || item.level_cd === classFilter);
+  const importMap = new Map(data.imports.map((item) => [item.race_cd, item]));
+  const viewRace = data.races.find((item) => item.race_cd === viewRaceCd);
+  useEffect(() => {
+    if (!viewRaceCd) return setTeams([]);
+    const supabase = createClient();
+    void supabase.from("teams").select("*").eq("race_cd", viewRaceCd).then(({data: rows}) => setTeams((rows || []) as Team[]));
+  }, [viewRaceCd]);
+
+  async function importRaces(codes: string[]) {
+    if (!codes.length) return;
+    setBusy(true);
+    try {
+      const body = codes.length === 1
+        ? await adminRequest(`/history-imports/${codes[0]}/retry`, {method: "POST"})
+        : await adminRequest("/history-imports/batch", {method: "POST", body: JSON.stringify({race_cds: codes})});
+      setNotice(codes.length === 1 ? "เพิ่มรอบเข้าคิวนำเข้าแล้ว" : `เพิ่มเข้าคิว ${body.accepted?.length || 0} รอบ · ข้าม ${body.skipped?.length || 0} รอบ`);
+      setSelected(new Set());
+      await reload();
+    } catch (error) { setNotice(`นำเข้าไม่สำเร็จ — ${String(error)}`); }
+    finally { setBusy(false); }
+  }
+
+  return <div className="history-workspace">
+    <section className="panel match-toolbar">
+      <div className="match-picker-row">
+        <label>รายการแข่งขัน<select value={matchCd} onChange={(event) => {setMatchCd(event.target.value); setClassFilter(""); setSelected(new Set());}}>
+          {data.matches.map((item) => <option value={item.match_cd} key={item.match_cd}>{item.name}</option>)}
+        </select></label>
+      </div>
+      <div className="class-filter">
+        <button className={!classFilter ? "active" : ""} onClick={() => setClassFilter("")}>ทุกประเภท ({finished.length})</button>
+        {classes.map(([value, label]) => <button className={classFilter === value ? "active" : ""} key={value} onClick={() => setClassFilter(value)}>{label} ({finished.filter((item) => item.level_cd === value).length})</button>)}
+      </div>
+    </section>
+    <section className="panel history-import-list">
+      <PanelTitle icon={<Clock3/>} title="รอบที่จบแล้ว" meta={data.role === "admin" ? <button className="text-button" disabled={busy || !selected.size} onClick={() => importRaces([...selected])}>นำเข้า {selected.size} รอบที่เลือก</button> : <span>ดูได้เมื่อข้อมูลพร้อม</span>}/>
+      {visible.map((race) => {
+        const job = importMap.get(race.race_cd);
+        const ready = Boolean(race.history_imported_at) || job?.status === "completed";
+        const selectable = data.role === "admin" && job?.status !== "running" && !ready;
+        const label = ready ? "พร้อมดูย้อนหลัง" : job?.status === "running" ? `กำลังนำเข้า ${number(job.progress_percent, 0)}%` : job?.status === "pending" ? "รอดำเนินการ" : job?.status === "error" ? "นำเข้าไม่สำเร็จ" : "ยังไม่ได้นำเข้า";
+        return <div className="history-import-row" key={race.race_cd}>
+          <label>{selectable && <input type="checkbox" checked={selected.has(race.race_cd)} onChange={(event) => setSelected((current) => {const next = new Set(current); event.target.checked ? next.add(race.race_cd) : next.delete(race.race_cd); return next;})}/>}<span><b>{classNameOf(race)} · {race.rounds || "ไม่ระบุรอบ"}</b><small>{bangkokTime(race.end_at)}</small></span></label>
+          <i className={`import-status ${job?.status || (ready ? "completed" : "idle")}`}>{label}</i>
+          <div>{ready ? <button onClick={() => setViewRaceCd(race.race_cd)}>เปิดดูย้อนหลัง</button> : data.role === "admin" && <button disabled={busy || job?.status === "running"} onClick={() => importRaces([race.race_cd])}>{job?.status === "error" ? "ลองนำเข้าใหม่" : "นำเข้ารอบนี้"}</button>}</div>
+        </div>;
+      })}
+      {!visible.length && <div className="table-empty">ยังไม่มีรอบที่จบในรายการนี้</div>}
+      {notice && <div className="control-notice">{notice}</div>}
+    </section>
+    {viewRace && <History race={viewRace} teams={teams} role={data.role}/>}
+  </div>;
+}
+
+function PublishingWorkspace() {
+  const [data, setData] = useState<WorkspaceData>({matches: [], races: [], collectors: [], imports: [], role: "viewer"});
+  const [matchCd, setMatchCd] = useState("");
+  const [notice, setNotice] = useState("");
+  const reload = useCallback(async () => {
+    const next = await loadWorkspaceData();
+    setData(next);
+    setMatchCd((current) => next.matches.some((item) => item.match_cd === current) ? current : next.matches[0]?.match_cd || "");
+  }, []);
+  useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => {
+    const timer = window.setInterval(() => void reload(), 10000);
+    return () => window.clearInterval(timer);
+  }, [reload]);
+  const match = data.matches.find((item) => item.match_cd === matchCd);
+  const races = data.races.filter((item) => item.match_cd === matchCd);
+  const imports = new Map(data.imports.map((item) => [item.race_cd, item]));
+  const groups = [...new Map(races.map((item) => [item.level_cd || "", classNameOf(item)])).entries()];
+  async function toggle() {
+    if (!match) return;
+    try {
+      await adminRequest(`/matches/${match.match_cd}/visibility`, {method: "POST", body: JSON.stringify({is_public: !match.is_public})});
+      setNotice(!match.is_public ? "เปิดเผยรายการและทุกประเภทเรือแล้ว" : "ปิดเผยแพร่รายการแล้ว");
+      await reload();
+    } catch (error) { setNotice(`บันทึกไม่สำเร็จ — ${String(error)}`); }
+  }
+  return <div className="publishing-workspace">
+    <section className="panel match-toolbar">
+      <div className="match-picker-row"><label>รายการแข่งขัน<select value={matchCd} onChange={(event) => setMatchCd(event.target.value)}>{data.matches.map((item) => <option value={item.match_cd} key={item.match_cd}>{item.name}</option>)}</select></label></div>
+    </section>
+    {match && <section className="panel publishing-master">
+      <div><ShieldCheck/><span><b>{match.name}</b><small>เมื่อเปิด ทุกประเภทเรือในรายการนี้จะเผยแพร่โดยอัตโนมัติ</small></span></div>
+      <button className={match.is_public ? "enabled" : ""} disabled={data.role !== "admin"} onClick={toggle}>{match.is_public ? "กำลังเผยแพร่ · กดเพื่อปิด" : "เปิดเผยรายการนี้"}</button>
+    </section>}
+    {notice && <div className="control-notice">{notice}</div>}
+    {groups.map(([levelCd, label]) => <section className="panel class-race-group" key={levelCd}>
+      <PanelTitle icon={<Users/>} title={label} meta={<span>แสดงสถานะเท่านั้น</span>}/>
+      {races.filter((item) => (item.level_cd || "") === levelCd).map((race) => {
+        const job = imports.get(race.race_cd);
+        return <div className="settings-status-row" key={race.race_cd}><b>{race.rounds || race.name || "ไม่ระบุรอบ"}</b><i className={`race-status status-${race.sailfish_status}`}>{raceStatusLabel[race.sailfish_status || ""] || "ไม่ทราบสถานะ"}</i><span>{race.history_imported_at ? "พร้อมดูย้อนหลัง" : job?.status === "running" ? `กำลังนำเข้า ${number(job.progress_percent, 0)}%` : race.sailfish_status === "99" ? "รอนำเข้าข้อมูลย้อนหลัง" : "ข้อมูลสดตามสถานะรอบ"}</span></div>;
+      })}
+    </section>)}
+  </div>;
 }
 
 function CollectorSetup({races, onSynced}: {races: Race[]; onSynced: () => void}) {

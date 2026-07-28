@@ -27,7 +27,7 @@ export default function LoginPage() {
     <main className="login-shell">
       <section className="login-visual">
         <div className="brand-mark"><Wind size={25}/></div>
-        <p className="eyebrow">SAILFISH · ระบบวิเคราะห์การแข่งขัน</p>
+        <p className="eyebrow">SAILFISH · สมาคมเรือใบแห่งประเทศไทย</p>
         <h1>อ่านลม<br/>อ่านเกม<br/><em>ก่อนใคร</em></h1>
         <p className="login-intro">
           ระบบวิเคราะห์เส้นทาง ความเร็ว และมุมลมแบบวินาทีต่อวินาที
