@@ -64,8 +64,13 @@ class SailfishClient:
             params={"pageSize": 10000, "pageNo": 1, "matchCd": match_cd, "openFlag": 1},
         )
         response.raise_for_status()
-        body = response.json().get("data") or response.json()
-        return body.get("list") or body.get("records") or body if isinstance(body, list) else []
+        payload = response.json()
+        body = payload.get("data") or payload
+        if isinstance(body, list):
+            return body
+        if isinstance(body, dict):
+            return body.get("list") or body.get("records") or []
+        return []
 
     async def get_race(self, race_cd: str) -> dict[str, Any]:
         response = await self.http.get(
