@@ -9,13 +9,13 @@ import {
 import {createClient} from "@/lib/supabase/client";
 
 const navigation = [
-  {href: "/overview", label: "Overview", icon: CircleGauge},
-  {href: "/live", label: "Live Race", icon: Radio},
-  {href: "/history", label: "Races & History", icon: Clock3},
-  {href: "/compare", label: "Athlete Compare", icon: Users},
-  {href: "/control", label: "Collector Control", icon: SlidersHorizontal, admin: true},
-  {href: "/quality", label: "Data Quality", icon: ClipboardCheck, admin: true},
-  {href: "/settings", label: "Settings", icon: Settings, admin: true},
+  {href: "/overview", label: "ภาพรวม", icon: CircleGauge},
+  {href: "/live", label: "การแข่งขันสด", icon: Radio},
+  {href: "/history", label: "ผลการแข่งขันย้อนหลัง", icon: Clock3},
+  {href: "/compare", label: "เปรียบเทียบนักกีฬา", icon: Users},
+  {href: "/control", label: "ควบคุมการเก็บข้อมูล", icon: SlidersHorizontal, admin: true},
+  {href: "/quality", label: "ตรวจสอบคุณภาพข้อมูล", icon: ClipboardCheck, admin: true},
+  {href: "/settings", label: "ตั้งค่าระบบ", icon: Settings, admin: true},
 ];
 
 export function DashboardShell({
@@ -35,22 +35,22 @@ export function DashboardShell({
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="sidebar-brand"><span><Wind size={22}/></span><div><b>SailFish</b><small>RACE INTELLIGENCE</small></div></div>
+        <div className="sidebar-brand"><span><Wind size={22}/></span><div><b>SailFish</b><small>ระบบวิเคราะห์การแข่งขัน</small></div></div>
         <nav>
-          <p>WORKSPACE</p>
+          <p>เมนูหลัก</p>
           {navigation.filter((item) => !item.admin || role === "admin").map(({href, label, icon: Icon}) => (
             <Link className={pathname === href ? "active" : ""} href={href} key={href}><Icon size={18}/>{label}</Link>
           ))}
         </nav>
         <div className="sidebar-foot">
-          <div className="private-chip"><Shield size={14}/>{role === "admin" ? "ADMIN · PRIVATE" : "MEMBER · PRIVATE"}</div>
+          <div className="private-chip"><Shield size={14}/>{role === "admin" ? "ผู้ดูแล · ส่วนตัว" : "สมาชิก · ส่วนตัว"}</div>
           <button onClick={logout}><LogOut size={16}/><span>{email || "ออกจากระบบ"}</span></button>
         </div>
       </aside>
       <div className="main-column">
         <header className="topbar">
-          <div className="live-system"><span/> SYSTEM ONLINE</div>
-          <div className="topbar-meta"><Database size={15}/> UTC storage · Bangkok display <Activity size={15}/></div>
+          <div className="live-system"><span/> ระบบพร้อมใช้งาน</div>
+          <div className="topbar-meta"><Database size={15}/> เก็บเวลาแบบสากล · แสดงเวลาไทย <Activity size={15}/></div>
         </header>
         <main className="dashboard-content">{children}</main>
       </div>

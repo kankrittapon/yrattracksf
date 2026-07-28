@@ -64,7 +64,7 @@ export default function PublicTelemetryPage() {
   const [data, setData] = useState<PublicRaceData | null>(null);
   const [teamCd, setTeamCd] = useState("");
   const [history, setHistory] = useState<PublicAthlete[]>([]);
-  const [message, setMessage] = useState("กำลังโหลดรายการที่เปิดเป็น Public…");
+  const [message, setMessage] = useState("กำลังโหลดรายการที่อนุญาตให้บุคคลทั่วไปดู…");
 
   const modeRaces = useMemo(() => catalog.filter((item) => item.public_mode === mode), [catalog, mode]);
   const matches = useMemo(
@@ -83,10 +83,10 @@ export default function PublicTelemetryPage() {
   useEffect(() => {
     const supabase = createClient();
     void supabase.rpc("get_public_race_catalog").then(({data: rows, error}) => {
-      if (error) return setMessage(`ยังเปิด Public ไม่ได้: ${error.message}`);
+      if (error) return setMessage(`ยังเปิดหน้าสาธารณะไม่ได้: ${error.message}`);
       const next = (rows || []) as CatalogRace[];
       setCatalog(next);
-      setMessage(next.length ? "" : "ยังไม่มีประเภทเรือที่ Admin อนุญาตให้ดู Public");
+      setMessage(next.length ? "" : "ยังไม่มีประเภทเรือที่ผู้ดูแลอนุญาตให้บุคคลทั่วไปดู");
     });
   }, []);
 
@@ -144,18 +144,18 @@ export default function PublicTelemetryPage() {
   return (
     <main className="public-shell">
       <header className="public-header">
-        <div className="public-brand"><span><Wind/></span><div><b>SailFish</b><small>PUBLIC RACE INTELLIGENCE</small></div></div>
-        <div className="public-live-badge"><i/>{mode === "live" ? "LIVE TELEMETRY" : "RACE HISTORY"}</div>
+        <div className="public-brand"><span><Wind/></span><div><b>SailFish</b><small>ข้อมูลการแข่งขันสำหรับบุคคลทั่วไป</small></div></div>
+        <div className="public-live-badge"><i/>{mode === "live" ? "การแข่งขันสด" : "ผลการแข่งขันย้อนหลัง"}</div>
       </header>
       <section className="public-hero">
-        <p>SAILFISH TELEMETRY</p>
-        <h1>{mode === "live" ? "Live race dashboard" : "Race history"}</h1>
+        <p>ข้อมูลการแข่งขัน SAILFISH</p>
+        <h1>{mode === "live" ? "ติดตามการแข่งขันสด" : "ผลการแข่งขันย้อนหลัง"}</h1>
         <span>ข้อมูลที่ผู้จัดการแข่งขันอนุญาต · ไม่มีการแสดงพิกัดเรือ</span>
       </section>
       <section className="public-filters">
         <div className="public-tabs">
-          <button className={mode === "live" ? "active" : ""} onClick={() => setMode("live")}><Radio/> Live</button>
-          <button className={mode === "history" ? "active" : ""} onClick={() => setMode("history")}><Clock3/> History</button>
+          <button className={mode === "live" ? "active" : ""} onClick={() => setMode("live")}><Radio/> ถ่ายทอดสด</button>
+          <button className={mode === "history" ? "active" : ""} onClick={() => setMode("history")}><Clock3/> ย้อนหลัง</button>
         </div>
         <label>รายการ<select value={matchCd} onChange={(event) => {setMatchCd(event.target.value); setLevelCd("");}}>{matches.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
         <label>ประเภทเรือ<select value={levelCd} onChange={(event) => setLevelCd(event.target.value)}>{classes.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
@@ -166,36 +166,36 @@ export default function PublicTelemetryPage() {
       {data && <>
         <section className="public-race-title">
           <div><small>{data.race.match_name}</small><h2>{data.race.class_name} · {data.race.rounds}</h2><span>{data.race.race_name}</span></div>
-          <div><b>{data.athletes.length}</b><small>ATHLETES</small></div>
+          <div><b>{data.athletes.length}</b><small>นักกีฬา</small></div>
         </section>
         <section className="public-metrics">
-          <Metric icon={<Wind/>} label="WIND SPEED" value={`${number(data.wind?.speed_knots)} kt`} sub={bangkokTime(data.wind?.captured_at_ms)}/>
-          <Metric icon={<Compass/>} label="WIND FROM" value={`${number(data.wind?.direction_degree, 0)}°`} sub={directionName(data.wind?.direction_degree)}/>
-          <Metric icon={<Activity/>} label="DATA STATUS" value={freshness(data.wind?.updated_at).label} sub={mode === "live" ? "refresh every 2 sec" : "final reading"}/>
+          <Metric icon={<Wind/>} label="ความเร็วลม" value={`${number(data.wind?.speed_knots)} นอต`} sub={bangkokTime(data.wind?.captured_at_ms)}/>
+          <Metric icon={<Compass/>} label="ทิศที่ลมพัดมา" value={`${number(data.wind?.direction_degree, 0)}°`} sub={directionName(data.wind?.direction_degree)}/>
+          <Metric icon={<Activity/>} label="สถานะข้อมูล" value={freshness(data.wind?.updated_at).label} sub={mode === "live" ? "อัปเดตทุก 2 วินาที" : "ข้อมูลสุดท้ายของรอบ"}/>
         </section>
 
         {mode === "live" ? <section className="public-table-card">
-          <h3>Fleet performance</h3>
-          <div className="public-table-head"><span>SAIL / ATHLETE</span><span>SOG</span><span>COG</span><span>WIND ∠</span><span>VMG</span></div>
+          <h3>ผลงานนักกีฬา</h3>
+          <div className="public-table-head"><span>ใบเรือ / นักกีฬา</span><span>ความเร็ว (SOG)</span><span>ทิศทาง (COG)</span><span>มุมเทียบลม</span><span>ความเร็วเข้าหาลม</span></div>
           {data.athletes.map((item) => <div className="public-table-row" key={item.team_cd}>
             <span><b>{item.sail_no || "—"}</b><i>{item.team_name || item.team_cd} · {item.nationality || "—"}</i></span>
-            <span>{number(item.sog_knots)} <small>kt</small></span><span>{number(item.cog_degree, 0)}°</span>
+            <span>{number(item.sog_knots)} <small>นอต</small></span><span>{number(item.cog_degree, 0)}°</span>
             <span>{item.relative_angle_degree == null ? "—" : `${number(item.relative_angle_degree, 0)}°`}</span>
             <span>{item.upwind_vmg_knots == null ? "—" : number(item.upwind_vmg_knots)}</span>
           </div>)}
         </section> : <section className="public-history-grid">
           <aside className="public-roster"><h3>นักกีฬา</h3>{data.athletes.map((item) => <button className={teamCd === item.team_cd ? "active" : ""} key={item.team_cd} onClick={() => setTeamCd(item.team_cd)}><b>{item.sail_no || "—"}</b><span>{item.team_name || item.team_cd}<small>{item.nationality || "—"}</small></span></button>)}</aside>
-          <div className="public-history-panel"><h3>{selected?.team_name || "Athlete history"}</h3>
+          <div className="public-history-panel"><h3>{selected?.team_name || "ข้อมูลนักกีฬาย้อนหลัง"}</h3>
             <div className="public-metrics compact">
-              <Metric icon={<Gauge/>} label="FINAL SOG" value={`${number(latestHistory?.sog_knots)} kt`} sub={`${history.length} samples`}/>
-              <Metric icon={<Compass/>} label="FINAL COG" value={`${number(latestHistory?.cog_degree, 0)}°`} sub={bangkokTime(latestHistory?.captured_at_ms)}/>
-              <Metric icon={<Wind/>} label="WIND ANGLE" value={latestHistory?.relative_angle_degree == null ? "—" : `${number(latestHistory.relative_angle_degree, 0)}°`} sub="course-to-wind"/>
+              <Metric icon={<Gauge/>} label="ความเร็วล่าสุด (SOG)" value={`${number(latestHistory?.sog_knots)} นอต`} sub={`${history.length} จุดข้อมูล`}/>
+              <Metric icon={<Compass/>} label="ทิศทางล่าสุด (COG)" value={`${number(latestHistory?.cog_degree, 0)}°`} sub={bangkokTime(latestHistory?.captured_at_ms)}/>
+              <Metric icon={<Wind/>} label="มุมเส้นทางเทียบลม" value={latestHistory?.relative_angle_degree == null ? "—" : `${number(latestHistory.relative_angle_degree, 0)}°`} sub="คำนวณจากทิศทางและลม"/>
             </div>
             <HistoryChart rows={history}/>
           </div>
         </section>}
       </>}
-      <footer className="public-footer">Course-to-wind ใช้ COG เทียบกับทิศลมจากทุ่น · COG ไม่ใช่ทิศหัวเรือ</footer>
+      <footer className="public-footer">มุมเส้นทางเทียบลม คำนวณจากทิศทางการเคลื่อนที่เทียบกับทิศลมจากทุ่น · ทิศทางการเคลื่อนที่ไม่ใช่ทิศหัวเรือ</footer>
     </main>
   );
 }
@@ -209,5 +209,5 @@ function HistoryChart({rows}: {rows: PublicAthlete[]}) {
   const values = rows.map((row) => row.sog_knots || 0);
   const max = Math.max(...values, 1);
   const points = values.map((value, index) => `${index / Math.max(values.length - 1, 1) * 100},${94 - value / max * 82}`).join(" ");
-  return <div className="public-chart"><div><b>SOG over time</b><span>sample ทุก 5 วินาที</span></div><svg viewBox="0 0 100 100" preserveAspectRatio="none"><polyline points={points}/></svg></div>;
+  return <div className="public-chart"><div><b>ความเร็วตามเวลา</b><span>แสดงหนึ่งจุดทุก 5 วินาที</span></div><svg viewBox="0 0 100 100" preserveAspectRatio="none"><polyline points={points}/></svg></div>;
 }

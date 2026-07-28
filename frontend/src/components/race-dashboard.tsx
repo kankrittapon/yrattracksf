@@ -31,13 +31,41 @@ interface SailFishMatch {
 }
 
 const titles: Record<Section, [string, string]> = {
-  overview: ["Race overview", "ภาพรวมการแข่งขันและสัญญาณล่าสุด"],
-  live: ["Live race", "ตำแหน่ง ลม และสมรรถนะวินาทีต่อวินาที"],
-  history: ["Races & history", "สำรวจและเล่นข้อมูลการแข่งขันย้อนหลัง"],
-  compare: ["Athlete compare", "เปรียบเทียบเส้นทาง ความเร็ว และมุมเทียบลม"],
-  control: ["Collector control", "Arm และควบคุม Collector ผ่าน Tailscale เท่านั้น"],
-  quality: ["Data quality", "ตรวจความสด ช่องว่าง การเชื่อมต่อ และ decoder"],
-  settings: ["Race settings", "ตั้งค่าทุ่นลม หน่วย เวลา และนโยบายข้อมูล"],
+  overview: ["ภาพรวมการแข่งขัน", "สถานะการแข่งขัน ลม และข้อมูลล่าสุด"],
+  live: ["การแข่งขันสด", "ตำแหน่ง ลม และผลงานของนักกีฬาแบบวินาทีต่อวินาที"],
+  history: ["ผลการแข่งขันย้อนหลัง", "เลือกดูและเล่นข้อมูลการแข่งขันที่ผ่านมา"],
+  compare: ["เปรียบเทียบนักกีฬา", "เปรียบเทียบเส้นทาง ความเร็ว และมุมเทียบลม"],
+  control: ["ควบคุมการเก็บข้อมูล", "เริ่ม หยุด และตรวจการเก็บข้อมูลผ่าน Tailscale"],
+  quality: ["ตรวจสอบคุณภาพข้อมูล", "ตรวจข้อมูลล่าช้า ข้อมูลขาด และปัญหาการเชื่อมต่อ"],
+  settings: ["ตั้งค่าระบบ", "ตั้งค่าทุ่นลม เวลา การเก็บข้อมูล และสิทธิ์การเผยแพร่"],
+};
+
+const collectorState: Record<string, string> = {
+  idle: "ยังไม่เริ่ม",
+  armed: "เตรียมพร้อม",
+  waiting_for_start: "รอเริ่มการแข่งขัน",
+  recording: "กำลังเก็บข้อมูล",
+  finishing: "กำลังจบการเก็บข้อมูล",
+  completed: "เก็บข้อมูลเสร็จแล้ว",
+  error: "เกิดข้อผิดพลาด",
+  pending: "รอดำเนินการ",
+  running: "กำลังนำเข้าข้อมูล",
+};
+
+const actionName: Record<string, string> = {
+  arm: "เตรียมเก็บข้อมูล",
+  "start-override": "เริ่มเก็บข้อมูลด้วยตนเอง",
+  stop: "หยุดเก็บข้อมูล",
+  retry: "ลองใหม่",
+};
+
+const qualityEventName: Record<string, string> = {
+  unknown_binary_frame: "พบข้อมูลที่ยังแปลไม่ได้",
+  history_wind_unavailable: "บางช่วงไม่มีข้อมูลลมสำหรับคำนวณ",
+  decoder_error: "แปลข้อมูลไม่สำเร็จ",
+  timestamp_gap: "พบช่วงเวลาที่ข้อมูลขาด",
+  duplicate_device: "พบอุปกรณ์ที่ผูกกับนักกีฬามากกว่าหนึ่งคน",
+  websocket_reconnect: "ช่องรับข้อมูลสดเชื่อมต่อใหม่",
 };
 
 export function RaceDashboard({section}: {section: Section}) {
@@ -145,13 +173,13 @@ export function RaceDashboard({section}: {section: Section}) {
   async function control(action: "arm" | "start-override" | "stop" | "retry") {
     setNotice("กำลังเชื่อมต่อ ai-brain ผ่าน Tailscale…");
     const api = process.env.NEXT_PUBLIC_CONTROL_API_URL;
-    if (!api) return setNotice("ยังไม่ได้ตั้งค่า NEXT_PUBLIC_CONTROL_API_URL");
+    if (!api) return setNotice("ยังไม่ได้ตั้งค่าที่อยู่ระบบควบคุม");
     const supabase = createClient();
     const {data: {session}} = await supabase.auth.getSession();
-    if (!session) return setNotice("Session หมดอายุ กรุณาเข้าสู่ระบบใหม่");
+    if (!session) return setNotice("การเข้าสู่ระบบหมดอายุ กรุณาเข้าสู่ระบบใหม่");
     const reason = action === "arm" || action === "retry"
-      ? "Dashboard control"
-      : window.prompt("ระบุเหตุผลสำหรับ audit log", "") || "";
+      ? "สั่งงานจากหน้าควบคุม"
+      : window.prompt("กรุณาระบุเหตุผลในการสั่งงาน", "") || "";
     if ((action === "start-override" || action === "stop") && reason.length < 3) {
       return setNotice("ต้องระบุเหตุผลอย่างน้อย 3 ตัวอักษร");
     }
@@ -166,7 +194,7 @@ export function RaceDashboard({section}: {section: Section}) {
       });
       if (!response.ok) throw new Error((await response.json()).detail || `HTTP ${response.status}`);
       setCollector(await response.json());
-      setNotice(`คำสั่ง ${action} สำเร็จ`);
+      setNotice(`${actionName[action]}สำเร็จ`);
     } catch (error) {
       setNotice(`เชื่อมต่อไม่ได้ — กรุณาเชื่อม Tailscale (${String(error)})`);
     }
@@ -175,9 +203,9 @@ export function RaceDashboard({section}: {section: Section}) {
   return (
     <>
       <div className="page-heading">
-        <div><p className="eyebrow">SAILFISH TELEMETRY</p><h1>{titles[section][0]}</h1><span>{titles[section][1]}</span></div>
+        <div><p className="eyebrow">ข้อมูลการแข่งขัน SAILFISH</p><h1>{titles[section][0]}</h1><span>{titles[section][1]}</span></div>
         <div className="race-picker">
-          <label>{section === "history" ? "HISTORY RACE" : "ACTIVE RACE"}</label>
+          <label>{section === "history" ? "เลือกรอบย้อนหลัง" : "เลือกรอบที่กำลังแข่ง"}</label>
           {section === "history" && <div className="history-filter-row">
             <select value={matchFilter} onChange={(event) => {setMatchFilter(event.target.value); setClassFilter("");}}>
               <option value="">ทุกรายการแข่งขัน</option>
@@ -225,10 +253,10 @@ function CollectorSetup({onSynced}: {onSynced: () => void}) {
 
   async function request(path: string, init?: RequestInit) {
     const api = process.env.NEXT_PUBLIC_CONTROL_API_URL;
-    if (!api) throw new Error("ยังไม่ได้ตั้งค่า Control API URL");
+    if (!api) throw new Error("ยังไม่ได้ตั้งค่าที่อยู่ระบบควบคุม");
     const supabase = createClient();
     const {data: {session}} = await supabase.auth.getSession();
-    if (!session) throw new Error("Session หมดอายุ กรุณาเข้าสู่ระบบใหม่");
+    if (!session) throw new Error("การเข้าสู่ระบบหมดอายุ กรุณาเข้าสู่ระบบใหม่");
     const response = await fetch(`${api.replace(/\/$/, "")}${path}`, {
       ...init,
       headers: {
@@ -253,7 +281,7 @@ function CollectorSetup({onSynced}: {onSynced: () => void}) {
       setMatches(items);
       setMatchCd(items[0]?.matchCd || "");
       setMessage(items.length
-        ? `พบ ${items.length} รายการ เลือกรายการแล้วกด Sync Active Races`
+        ? `พบ ${items.length} รายการ เลือกรายการแล้วกดเชื่อมรอบที่กำลังแข่ง`
         : "ไม่พบรายการแข่งขันในบัญชี SailFish");
     } catch (error) {
       setMessage(`ค้นหาไม่สำเร็จ — ${String(error)}`);
@@ -265,7 +293,7 @@ function CollectorSetup({onSynced}: {onSynced: () => void}) {
   async function sync() {
     if (!matchCd) return;
     setBusy(true);
-    setMessage("กำลังตรวจรอบที่เจ้าของสนามกด Start และเปิด Collector…");
+    setMessage("กำลังตรวจรอบที่เจ้าของสนามกดเริ่ม และเปิดระบบเก็บข้อมูล…");
     try {
       const body = await request("/races/sync", {
         method: "POST",
@@ -273,13 +301,13 @@ function CollectorSetup({onSynced}: {onSynced: () => void}) {
       });
       const count = Array.isArray(body.items) ? body.items.length : 0;
       if (!count) {
-        setMessage("ยังไม่มีรอบสถานะ Live (50) — ให้เจ้าของสนามกด Start ใน SailFish แล้วกด Sync อีกครั้ง");
+        setMessage("ยังไม่มีรอบที่กำลังแข่งขัน — ให้เจ้าของสนามกดเริ่มใน SailFish แล้วกดเชื่อมข้อมูลอีกครั้ง");
         return;
       }
-      setMessage(`Sync สำเร็จ ${count} รอบ กำลังโหลด Dashboard…`);
+      setMessage(`เชื่อมข้อมูลสำเร็จ ${count} รอบ กำลังโหลดหน้าหลัก…`);
       onSynced();
     } catch (error) {
-      setMessage(`Sync ไม่สำเร็จ — ${String(error)}`);
+      setMessage(`เชื่อมข้อมูลไม่สำเร็จ — ${String(error)}`);
     } finally {
       setBusy(false);
     }
@@ -290,13 +318,13 @@ function CollectorSetup({onSynced}: {onSynced: () => void}) {
       <section className="panel control-main">
         <div className="control-lock">
           <LockKeyhole/>
-          <div><b>TAILSCALE PRIVATE SETUP</b><span>คำสั่งส่งจาก browser ไป ai-brain โดยตรง</span></div>
+          <div><b>ตั้งค่าผ่านเครือข่ายส่วนตัว TAILSCALE</b><span>คำสั่งส่งจากเครื่องนี้ไปยัง ai-brain โดยตรง</span></div>
         </div>
         <h2>เชื่อมรายการจาก SailFish</h2>
-        <p className="setup-copy">ระบบจะนำเข้าและ Arm เฉพาะรอบที่เจ้าของสนามกด Start ใน SailFish แล้วเท่านั้น</p>
+        <p className="setup-copy">ระบบจะนำเข้าและเตรียมเก็บข้อมูลเฉพาะรอบที่เจ้าของสนามกดเริ่มใน SailFish แล้วเท่านั้น</p>
         <div className="setup-actions">
           <button className="arm" disabled={busy} onClick={discover}>
-            <Database/> {busy ? "กำลังทำงาน…" : "Discover matches"}
+            <Database/> {busy ? "กำลังทำงาน…" : "ค้นหารายการแข่งขัน"}
           </button>
           {matches.length > 0 && (
             <>
@@ -309,7 +337,7 @@ function CollectorSetup({onSynced}: {onSynced: () => void}) {
                 ))}
               </select>
               <button disabled={busy || !matchCd} onClick={sync}>
-                <RefreshCw/> Sync Active Races
+                <RefreshCw/> เชื่อมรอบที่กำลังแข่ง
               </button>
             </>
           )}
@@ -328,32 +356,32 @@ function Overview({race, collector, wind, athletes, liveCount, teamMap}: {
   return (
     <>
       <section className="hero-status">
-        <div><div className="status-kicker"><span className="pulse"/> {collector?.state || "NOT ARMED"}</div><h2>{race.name || "Unnamed race"} <em>{race.rounds || ""}</em></h2><p>{athletes.length} athletes · Main wind instrument · Bangkok time {bangkokTime(Date.now())}</p></div>
+        <div><div className="status-kicker"><span className="pulse"/> {collectorState[collector?.state || "idle"]}</div><h2>{race.name || "ยังไม่มีชื่อการแข่งขัน"} <em>{race.rounds || ""}</em></h2><p>นักกีฬา {athletes.length} คน · ใช้ทุ่นลมหลัก · เวลาไทย {bangkokTime(Date.now())}</p></div>
         <div className="hero-metrics">
-          <Metric label="LIVE ATHLETES" value={`${liveCount}/${athletes.length}`} sub="≤ 5 sec" icon={<Users/>}/>
-          <Metric label="MESSAGES" value={String(collector?.messages_received || 0)} sub={`${collector?.reconnects || 0} reconnects`} icon={<Activity/>}/>
-          <Metric label="SAILFISH STATUS" value={collector?.sailfish_status || race.sailfish_status || "—"} sub={collector?.websocket_connected ? "socket connected" : "socket offline"} icon={<Radio/>}/>
+          <Metric label="นักกีฬาที่ข้อมูลเป็นปัจจุบัน" value={`${liveCount}/${athletes.length}`} sub="ไม่เกิน 5 วินาที" icon={<Users/>}/>
+          <Metric label="ข้อมูลที่ได้รับ" value={String(collector?.messages_received || 0)} sub={`เชื่อมต่อใหม่ ${collector?.reconnects || 0} ครั้ง`} icon={<Activity/>}/>
+          <Metric label="สถานะจาก SAILFISH" value={collector?.sailfish_status || race.sailfish_status || "—"} sub={collector?.websocket_connected ? "เชื่อมต่อข้อมูลสดแล้ว" : "ยังไม่เชื่อมต่อข้อมูลสด"} icon={<Radio/>}/>
         </div>
       </section>
       <div className="dashboard-grid">
         <section className="panel wind-card">
-          <PanelTitle icon={<Wind/>} title="Main wind" meta={<StatusDot state={windFresh.className} label={windFresh.label}/>}/>
+          <PanelTitle icon={<Wind/>} title="ลมจากทุ่นหลัก" meta={<StatusDot state={windFresh.className} label={windFresh.label}/>}/>
           <div className="wind-readout">
             <div className="compass-dial"><div className="compass-arrow" style={{transform: `rotate(${wind?.direction_degree || 0}deg)`}}/><b>{number(wind?.direction_degree, 0)}°</b><span>{directionName(wind?.direction_degree)}</span></div>
-            <div><strong>{number(wind?.speed_knots, 1)}</strong><small>KNOTS</small><p>Updated {bangkokTime(wind?.captured_at_ms)}</p></div>
+            <div><strong>{number(wind?.speed_knots, 1)}</strong><small>นอต</small><p>อัปเดต {bangkokTime(wind?.captured_at_ms)}</p></div>
           </div>
         </section>
         <section className="panel athlete-snapshot">
-          <PanelTitle icon={<Gauge/>} title="Fleet snapshot" meta={<span>{athletes.length} boats</span>}/>
+          <PanelTitle icon={<Gauge/>} title="ข้อมูลนักกีฬาล่าสุด" meta={<span>{athletes.length} ลำ</span>}/>
           <AthleteTable athletes={athletes.slice(0, 7)} teamMap={teamMap}/>
         </section>
         <section className="panel health-panel">
-          <PanelTitle icon={<ShieldCheck/>} title="Collector health" meta={null}/>
+          <PanelTitle icon={<ShieldCheck/>} title="สถานะระบบเก็บข้อมูล" meta={null}/>
           <div className="health-list">
-            <HealthRow label="Tailscale control" ok={true} value="Private"/>
-            <HealthRow label="WebSocket" ok={Boolean(collector?.websocket_connected)} value={collector?.websocket_connected ? "Connected" : "Offline"}/>
-            <HealthRow label="Last message" ok={freshness(collector?.last_message_at).className === "live"} value={bangkokTime(collector?.last_message_at)}/>
-            <HealthRow label="Decoder" ok={!collector?.last_error} value={collector?.last_error ? "Attention" : "Ready"}/>
+            <HealthRow label="การควบคุมผ่าน Tailscale" ok={true} value="ส่วนตัว"/>
+            <HealthRow label="ช่องรับข้อมูลสด" ok={Boolean(collector?.websocket_connected)} value={collector?.websocket_connected ? "เชื่อมต่อแล้ว" : "ไม่ได้เชื่อมต่อ"}/>
+            <HealthRow label="ข้อมูลล่าสุด" ok={freshness(collector?.last_message_at).className === "live"} value={bangkokTime(collector?.last_message_at)}/>
+            <HealthRow label="การแปลข้อมูล" ok={!collector?.last_error} value={collector?.last_error ? "ต้องตรวจสอบ" : "พร้อมใช้งาน"}/>
           </div>
         </section>
       </div>
@@ -367,17 +395,17 @@ function LiveRace({race, collector, wind, athletes, teamMap}: {
   return (
     <div className="live-layout">
       <section className="panel race-map-panel">
-        <PanelTitle icon={<LocateFixed/>} title={`${race.name || "Race"} · live field`} meta={<StatusDot state={collector?.websocket_connected ? "live" : "offline"} label={collector?.websocket_connected ? "LIVE" : "OFFLINE"}/>}/>
+        <PanelTitle icon={<LocateFixed/>} title={`${race.name || "การแข่งขัน"} · สนามแข่งขัน`} meta={<StatusDot state={collector?.websocket_connected ? "live" : "offline"} label={collector?.websocket_connected ? "กำลังรับข้อมูล" : "ไม่ได้เชื่อมต่อ"}/>}/>
         <RaceMap athletes={athletes} wind={wind} teamMap={teamMap}/>
       </section>
       <section className="panel live-wind-side">
-        <PanelTitle icon={<Wind/>} title="Wind now" meta={null}/>
-        <div className="big-number">{number(wind?.speed_knots)}<small>kt</small></div>
+        <PanelTitle icon={<Wind/>} title="ลมขณะนี้" meta={null}/>
+        <div className="big-number">{number(wind?.speed_knots)}<small>นอต</small></div>
         <div className="direction-row"><Compass/> {number(wind?.direction_degree, 0)}° · {directionName(wind?.direction_degree)}</div>
-        <p className="data-note">Main instrument · {bangkokTime(wind?.captured_at_ms)}</p>
+        <p className="data-note">ทุ่นลมหลัก · {bangkokTime(wind?.captured_at_ms)}</p>
       </section>
       <section className="panel fleet-table-panel">
-        <PanelTitle icon={<Users/>} title="Fleet telemetry" meta={<span>COG ≠ heading</span>}/>
+        <PanelTitle icon={<Users/>} title="ข้อมูลนักกีฬา" meta={<span>ทิศทางการเคลื่อนที่ ไม่ใช่ทิศหัวเรือ</span>}/>
         <AthleteTable athletes={athletes} teamMap={teamMap}/>
       </section>
     </div>
@@ -441,8 +469,8 @@ function History({race, teams, role}: {race: Race; teams: Team[]; role: string})
   return (
     <div className="history-layout">
       <section className="panel replay-stage">
-        <PanelTitle icon={<Clock3/>} title={`${race.name || "Race"} · ${race.rounds || "history"}`} meta={role === "admin" ? <button className="text-button" onClick={exportCsv}>Export CSV</button> : <span>UTC source</span>}/>
-        {current ? <RaceMap athletes={[current]} wind={null} teamMap={teamMap}/> : <div className="replay-placeholder"><Anchor/><h3>{selected ? `กำลังโหลด ${selected.team_name}` : "เลือกนักกีฬา"}</h3><p>ข้อมูลหนึ่งวินาทีจะถูกเล่นบนแผนที่พร้อม COG และ VMG</p></div>}
+        <PanelTitle icon={<Clock3/>} title={`${race.name || "การแข่งขัน"} · ${race.rounds || "ย้อนหลัง"}`} meta={role === "admin" ? <button className="text-button" onClick={exportCsv}>ดาวน์โหลดตารางข้อมูล</button> : <span>เวลาอ้างอิงสากล</span>}/>
+        {current ? <RaceMap athletes={[current]} wind={null} teamMap={teamMap}/> : <div className="replay-placeholder"><Anchor/><h3>{selected ? `กำลังโหลด ${selected.team_name}` : "เลือกนักกีฬา"}</h3><p>เล่นข้อมูลทุกวินาที พร้อมทิศทางการเคลื่อนที่และความเร็วเข้าหาลม</p></div>}
         <div className="replay-controls">
           <button onClick={() => setCursor(0)}><RotateCcw/></button>
           <button className="play" onClick={() => setPlaying((value) => !value)}>{playing ? <Square/> : <Play/>}</button>
@@ -451,7 +479,7 @@ function History({race, teams, role}: {race: Race; teams: Team[]; role: string})
         </div>
       </section>
       <section className="panel history-roster">
-        <PanelTitle icon={<Users/>} title="Athletes" meta={<span>{teams.length}</span>}/>
+        <PanelTitle icon={<Users/>} title="นักกีฬา" meta={<span>{teams.length}</span>}/>
         {teams.map((team) => <label className="check-row" key={team.team_cd}><input type="radio" name="history-team" checked={selectedTeam === team.team_cd} onChange={() => setSelectedTeam(team.team_cd)}/><span>{team.sail_no || "—"}</span><b>{team.team_name || team.team_cd}</b></label>)}
       </section>
     </div>
@@ -466,12 +494,12 @@ function Compare({athletes, teamMap}: {athletes: AthleteState[]; teamMap: Map<st
         const team = teamMap.get(athlete.team_cd);
         return <section className="panel athlete-card" key={athlete.team_cd}>
           <div className={`sail-accent accent-${index + 1}`}/>
-          <p>SAIL {team?.sail_no || "—"}</p><h2>{team?.team_name || athlete.team_cd}</h2>
+          <p>หมายเลขใบเรือ {team?.sail_no || "—"}</p><h2>{team?.team_name || athlete.team_cd}</h2>
           <div className="comparison-metrics">
-            <Metric label="SOG" value={number(athlete.sog_knots)} sub="knots" icon={<Gauge/>}/>
-            <Metric label="COG" value={`${number(athlete.cog_degree, 0)}°`} sub="course" icon={<Compass/>}/>
-            <Metric label="WIND ANGLE" value={`${number(athlete.relative_angle_degree, 0)}°`} sub="course-to-wind" icon={<Wind/>}/>
-            <Metric label="UPWIND VMG" value={number(athlete.upwind_vmg_knots)} sub="knots" icon={<ArrowRight/>}/>
+            <Metric label="ความเร็วเหนือพื้นน้ำ (SOG)" value={number(athlete.sog_knots)} sub="นอต" icon={<Gauge/>}/>
+            <Metric label="ทิศทางการเคลื่อนที่ (COG)" value={`${number(athlete.cog_degree, 0)}°`} sub="องศา" icon={<Compass/>}/>
+            <Metric label="มุมเส้นทางเทียบลม" value={`${number(athlete.relative_angle_degree, 0)}°`} sub="องศา" icon={<Wind/>}/>
+            <Metric label="ความเร็วเข้าหาลม (VMG)" value={number(athlete.upwind_vmg_knots)} sub="นอต" icon={<ArrowRight/>}/>
           </div>
         </section>;
       })}
@@ -488,28 +516,28 @@ function Control({collector, race, notice, historyImport, onControl}: {
   return (
     <div className="control-layout">
       <section className="panel control-main">
-        <div className="control-lock"><LockKeyhole/><div><b>TAILSCALE PRIVATE CONTROL</b><span>คำสั่งถูกส่งจาก browser ไป ai-brain โดยตรง</span></div></div>
+        <div className="control-lock"><LockKeyhole/><div><b>ควบคุมผ่านเครือข่ายส่วนตัว TAILSCALE</b><span>คำสั่งถูกส่งจากเครื่องนี้ไปยัง ai-brain โดยตรง</span></div></div>
         <h2>{race.name} · {race.rounds}</h2>
-        <div className="state-flow">{["idle", "armed", "waiting_for_start", "recording", "finishing", "completed"].map((state) => <span className={collector?.state === state ? "current" : ""} key={state}>{state.replaceAll("_", " ")}</span>)}</div>
+        <div className="state-flow">{["idle", "armed", "waiting_for_start", "recording", "finishing", "completed"].map((state) => <span className={collector?.state === state ? "current" : ""} key={state}>{collectorState[state]}</span>)}</div>
         <div className="control-buttons">
-          <button className="arm" onClick={() => onControl("arm")}><Radio/> Arm collector</button>
-          <button onClick={() => onControl("start-override")}><Play/> Manual start</button>
-          <button onClick={() => onControl("retry")}><RefreshCw/> Retry</button>
-          <button className="danger" onClick={() => onControl("stop")}><Square/> Stop</button>
+          <button className="arm" onClick={() => onControl("arm")}><Radio/> เตรียมเก็บข้อมูล</button>
+          <button onClick={() => onControl("start-override")}><Play/> เริ่มด้วยตนเอง</button>
+          <button onClick={() => onControl("retry")}><RefreshCw/> ลองใหม่</button>
+          <button className="danger" onClick={() => onControl("stop")}><Square/> หยุด</button>
         </div>
         {notice && <div className="control-notice">{notice}</div>}
       </section>
       <section className="panel control-status">
-        <PanelTitle icon={<Activity/>} title="Runtime" meta={null}/>
+        <PanelTitle icon={<Activity/>} title="สถานะการทำงาน" meta={null}/>
         <dl>
-          <dt>State</dt><dd>{collector?.state || "idle"}</dd>
-          <dt>WebSocket</dt><dd>{collector?.websocket_connected ? "connected" : "offline"}</dd>
-          <dt>Messages</dt><dd>{collector?.messages_received || 0}</dd>
-          <dt>Reconnects</dt><dd>{collector?.reconnects || 0}</dd>
-          <dt>Last message</dt><dd>{bangkokTime(collector?.last_message_at)}</dd>
-          <dt>History import</dt><dd>{historyImport?.status || "รอ Finish"}</dd>
-          <dt>History schedule</dt><dd>{historyImport ? bangkokTime(historyImport.scheduled_for) : "หลังจบ 90 นาที"}</dd>
-          <dt>Import progress</dt><dd>{number(historyImport?.progress_percent, 0)}%</dd>
+          <dt>ขั้นตอนปัจจุบัน</dt><dd>{collectorState[collector?.state || "idle"]}</dd>
+          <dt>ช่องรับข้อมูลสด</dt><dd>{collector?.websocket_connected ? "เชื่อมต่อแล้ว" : "ไม่ได้เชื่อมต่อ"}</dd>
+          <dt>ข้อมูลที่ได้รับ</dt><dd>{collector?.messages_received || 0}</dd>
+          <dt>จำนวนครั้งที่เชื่อมต่อใหม่</dt><dd>{collector?.reconnects || 0}</dd>
+          <dt>ข้อมูลล่าสุด</dt><dd>{bangkokTime(collector?.last_message_at)}</dd>
+          <dt>การนำเข้าข้อมูลย้อนหลัง</dt><dd>{historyImport ? collectorState[historyImport.status] || "เสร็จแล้ว" : "รอจบการแข่งขัน"}</dd>
+          <dt>เวลานำเข้าที่กำหนด</dt><dd>{historyImport ? bangkokTime(historyImport.scheduled_for) : "หลังจบ 90 นาที"}</dd>
+          <dt>ความคืบหน้า</dt><dd>{number(historyImport?.progress_percent, 0)}%</dd>
         </dl>
         {historyImport?.last_error && <div className="control-notice">{historyImport.last_error}</div>}
       </section>
@@ -522,15 +550,15 @@ function Quality({collector, quality, athletes, teams}: {collector: Collector | 
   return (
     <>
       <div className="quality-summary">
-        <Metric label="RECONNECTS" value={String(collector?.reconnects || 0)} sub="collector run" icon={<RefreshCw/>}/>
-        <Metric label="OPEN ALERTS" value={String(quality.filter((item) => !item.resolved_at).length)} sub="requires review" icon={<AlertTriangle/>}/>
-        <Metric label="STALE ATHLETES" value={String(athletes.filter((item) => freshness(item.updated_at).className !== "live").length)} sub="over 5 sec" icon={<Clock3/>}/>
-        <Metric label="DUPLICATE DEVICES" value={String(duplicateDevices.length)} sub="team assignments" icon={<Database/>}/>
+        <Metric label="เชื่อมต่อใหม่" value={String(collector?.reconnects || 0)} sub="ครั้งในรอบนี้" icon={<RefreshCw/>}/>
+        <Metric label="ปัญหาที่ยังไม่ได้ตรวจ" value={String(quality.filter((item) => !item.resolved_at).length)} sub="รายการ" icon={<AlertTriangle/>}/>
+        <Metric label="นักกีฬาที่ข้อมูลล่าช้า" value={String(athletes.filter((item) => freshness(item.updated_at).className !== "live").length)} sub="เกิน 5 วินาที" icon={<Clock3/>}/>
+        <Metric label="อุปกรณ์ที่ถูกใช้ซ้ำ" value={String(duplicateDevices.length)} sub="รายการ" icon={<Database/>}/>
       </div>
       <section className="panel quality-events">
-        <PanelTitle icon={<ClipboardCheck/>} title="Quality event stream" meta={<span>latest 30</span>}/>
-        {!quality.length && <div className="all-clear"><CheckCircle2/><b>ไม่พบปัญหาในรอบนี้</b><span>ระบบจะแสดง decoder, timestamp และ connection errors ที่นี่</span></div>}
-        {quality.map((item) => <div className="event-row" key={item.id}><span className={`severity ${item.severity}`}/><div><b>{item.event_type.replaceAll("_", " ")}</b><small>{JSON.stringify(item.details)}</small></div><time>{bangkokTime(item.created_at)}</time></div>)}
+        <PanelTitle icon={<ClipboardCheck/>} title="รายการปัญหาคุณภาพข้อมูล" meta={<span>30 รายการล่าสุด</span>}/>
+        {!quality.length && <div className="all-clear"><CheckCircle2/><b>ไม่พบปัญหาในรอบนี้</b><span>ปัญหาการแปลข้อมูล เวลา และการเชื่อมต่อจะแสดงที่นี่</span></div>}
+        {quality.map((item) => <div className="event-row" key={item.id}><span className={`severity ${item.severity}`}/><div><b>{qualityEventName[item.event_type] || "พบข้อมูลที่ต้องตรวจสอบ"}</b><small>รายละเอียดสำหรับผู้ดูแล: {JSON.stringify(item.details)}</small></div><time>{bangkokTime(item.created_at)}</time></div>)}
       </section>
     </>
   );
@@ -551,7 +579,7 @@ function SettingsPanel({race, wind, role}: {race: Race; wind: WindState | null; 
     const api = process.env.NEXT_PUBLIC_CONTROL_API_URL;
     const supabase = createClient();
     const {data: {session}} = await supabase.auth.getSession();
-    if (!api || !session) return setMessage("ต้อง Login และเชื่อม Tailscale ก่อนแก้สิทธิ์");
+    if (!api || !session) return setMessage("ต้องเข้าสู่ระบบและเชื่อม Tailscale ก่อนแก้สิทธิ์");
     const next = {...item, [field]: !item[field]};
     try {
       const response = await fetch(`${api.replace(/\/$/, "")}/race-classes/${item.level_cd}/visibility`, {
@@ -564,7 +592,7 @@ function SettingsPanel({race, wind, role}: {race: Race; wind: WindState | null; 
       });
       if (!response.ok) throw new Error((await response.json()).detail || `HTTP ${response.status}`);
       setClasses((values) => values.map((value) => value.level_cd === item.level_cd ? next : value));
-      setMessage(`บันทึกสิทธิ์ Public ของ ${item.name} แล้ว`);
+      setMessage(`บันทึกสิทธิ์การเผยแพร่ของ ${item.name} แล้ว`);
     } catch (error) {
       setMessage(`บันทึกไม่ได้ — เช็ก Tailscale (${String(error)})`);
     }
@@ -572,14 +600,14 @@ function SettingsPanel({race, wind, role}: {race: Race; wind: WindState | null; 
 
   return (
     <div className="settings-grid">
-      <section className="panel setting-card"><Settings2/><h3>Wind reference</h3><p>Main instrument</p><code>{race.main_wind_instrument_cd || wind?.wind_instrument_cd || "Not assigned"}</code><button disabled>เปลี่ยนผ่าน migration/config</button></section>
-      <section className="panel setting-card"><Clock3/><h3>Time & freshness</h3><p>Display: Asia/Bangkok</p><code>wind tolerance = 5 seconds</code><button disabled>UTC storage enforced</button></section>
-      <section className="panel setting-card"><Database/><h3>Retention</h3><p>Normalized: long-term</p><code>raw payload = 30 days</code><button disabled>Scheduled cleanup</button></section>
-      <section className="panel setting-card public-settings"><ShieldCheck/><h3>Public visibility</h3><p>อนุญาตแยก Live และ History รายประเภทเรือ</p>
+      <section className="panel setting-card"><Settings2/><h3>ทุ่นลมอ้างอิง</h3><p>ใช้เครื่องวัดลมหลัก</p><code>{race.main_wind_instrument_cd || wind?.wind_instrument_cd || "ยังไม่ได้กำหนด"}</code><button disabled>กำหนดจากการตั้งค่าระบบ</button></section>
+      <section className="panel setting-card"><Clock3/><h3>เวลาและความสดของข้อมูล</h3><p>แสดงเวลาไทย</p><code>ยอมรับข้อมูลลมที่ห่างไม่เกิน 5 วินาที</code><button disabled>จัดเก็บเวลาแบบสากล</button></section>
+      <section className="panel setting-card"><Database/><h3>ระยะเวลาเก็บข้อมูล</h3><p>ข้อมูลที่แปลแล้วเก็บระยะยาว</p><code>ข้อมูลดิบเก็บ 30 วัน</code><button disabled>ลบอัตโนมัติตามกำหนด</button></section>
+      <section className="panel setting-card public-settings"><ShieldCheck/><h3>สิทธิ์การเผยแพร่</h3><p>อนุญาตแยกการแข่งขันสดและข้อมูลย้อนหลังรายประเภทเรือ</p>
         {classes.map((item) => <div className="class-visibility" key={item.level_cd}>
           <b>{item.name}</b>
-          <button disabled={role !== "admin"} className={item.public_live_enabled ? "enabled" : ""} onClick={() => saveVisibility(item, "public_live_enabled")}>Live {item.public_live_enabled ? "ON" : "OFF"}</button>
-          <button disabled={role !== "admin"} className={item.public_history_enabled ? "enabled" : ""} onClick={() => saveVisibility(item, "public_history_enabled")}>History {item.public_history_enabled ? "ON" : "OFF"}</button>
+          <button disabled={role !== "admin"} className={item.public_live_enabled ? "enabled" : ""} onClick={() => saveVisibility(item, "public_live_enabled")}>สด: {item.public_live_enabled ? "เผยแพร่" : "ไม่เผยแพร่"}</button>
+          <button disabled={role !== "admin"} className={item.public_history_enabled ? "enabled" : ""} onClick={() => saveVisibility(item, "public_history_enabled")}>ย้อนหลัง: {item.public_history_enabled ? "เผยแพร่" : "ไม่เผยแพร่"}</button>
         </div>)}
         {message && <div className="control-notice">{message}</div>}
       </section>
@@ -602,14 +630,14 @@ function RaceMap({athletes, wind, teamMap}: {athletes: AthleteState[]; wind: Win
       <div className="map-grid"/>
       {wind?.latitude != null && wind.longitude != null && (() => {
         const p = xy(wind.latitude!, wind.longitude!);
-        return <div className="wind-marker" style={{left: `${p.x}%`, top: `${p.y}%`}}><Wind/><span>WIND</span></div>;
+        return <div className="wind-marker" style={{left: `${p.x}%`, top: `${p.y}%`}}><Wind/><span>ทุ่นลม</span></div>;
       })()}
       {points.map((athlete) => {
         const p = xy(athlete.latitude!, athlete.longitude!);
         const team = teamMap.get(athlete.team_cd);
         return <div className="boat-marker" key={athlete.team_cd} style={{left: `${p.x}%`, top: `${p.y}%`, transform: `translate(-50%,-50%) rotate(${athlete.cog_degree || 0}deg)`}}><Anchor/><b style={{transform: `rotate(-${athlete.cog_degree || 0}deg)`}}>{team?.sail_no || "•"}</b></div>;
       })}
-      {!points.length && <div className="map-empty">รอพิกัดนักกีฬา Live</div>}
+      {!points.length && <div className="map-empty">กำลังรอตำแหน่งนักกีฬา</div>}
     </div>
   );
 }
@@ -617,13 +645,13 @@ function RaceMap({athletes, wind, teamMap}: {athletes: AthleteState[]; wind: Win
 function AthleteTable({athletes, teamMap}: {athletes: AthleteState[]; teamMap: Map<string, Team>}) {
   return (
     <div className="athlete-table">
-      <div className="table-head"><span>SAIL / ATHLETE</span><span>SOG</span><span>COG</span><span>WIND ∠</span><span>VMG</span><span>STATUS</span></div>
+      <div className="table-head"><span>ใบเรือ / นักกีฬา</span><span>ความเร็ว (SOG)</span><span>ทิศทาง (COG)</span><span>มุมเทียบลม</span><span>ความเร็วเข้าหาลม</span><span>สถานะ</span></div>
       {athletes.map((athlete) => {
         const team = teamMap.get(athlete.team_cd);
         const fresh = freshness(athlete.updated_at);
         return <div className="table-row" key={athlete.team_cd}>
           <span><b>{team?.sail_no || "—"}</b><i>{team?.team_name || athlete.team_cd.slice(0, 8)}</i></span>
-          <span>{number(athlete.sog_knots)}<small> kt</small></span>
+          <span>{number(athlete.sog_knots)}<small> นอต</small></span>
           <span>{number(athlete.cog_degree, 0)}°</span>
           <span>{number(athlete.relative_angle_degree, 0)}°</span>
           <span className={(athlete.upwind_vmg_knots || 0) >= 0 ? "positive" : "negative"}>{number(athlete.upwind_vmg_knots)}</span>
@@ -677,20 +705,20 @@ function EmptyState() {
   const statusText = backendStatus === "checking"
     ? "กำลังตรวจการเชื่อมต่อ…"
     : backendStatus === "online"
-      ? "Online ผ่าน Tailscale"
-      : "Offline — ตรวจว่าอุปกรณ์เชื่อม Tailscale";
+      ? "เชื่อมต่อผ่าน Tailscale แล้ว"
+      : "เชื่อมต่อไม่ได้ — ตรวจว่าอุปกรณ์เปิด Tailscale";
 
   return (
     <div className="empty-state">
       <Anchor/>
       <h2>ยังไม่มีการแข่งขันในฐานข้อมูล</h2>
-      <p>เริ่มจากค้นหาและ Sync รายการแข่งขันผ่าน Collector Control</p>
+      <p>เริ่มจากค้นหาและเชื่อมรายการแข่งขันผ่านเมนูควบคุมการเก็บข้อมูล</p>
       <div className={`backend-connection ${backendStatus}`}>
         <i/>
-        <span><b>ai-brain Collector</b><small>{statusText}</small></span>
+        <span><b>ระบบเก็บข้อมูล ai-brain</b><small>{statusText}</small></span>
       </div>
       <Link className="empty-action" href="/control">
-        ไป Collector Control <ArrowRight/>
+        ไปหน้าควบคุมการเก็บข้อมูล <ArrowRight/>
       </Link>
     </div>
   );
