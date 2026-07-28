@@ -55,6 +55,22 @@ interface PublicRaceData {
   athletes: PublicAthlete[];
 }
 
+interface PublicWindRow {
+  captured_at_ms: number;
+  speed_knots: number | null;
+  direction_degree: number | null;
+  updated_at: string;
+}
+
+type WindWindow = "realtime" | "3" | "5" | "10";
+const windWindowOptions: Array<[WindWindow, string]> = [
+  ["realtime", "เวลาจริง"], ["3", "3 นาที"], ["5", "5 นาที"], ["10", "10 นาที"],
+];
+const windWindowMs = (value: WindWindow) => value === "realtime" ? 30_000 : Number(value) * 60_000;
+const wrapTo180 = (value: number) => ((value + 180) % 360 + 360) % 360 - 180;
+const buoyMinusCog = (relativeSigned: number | null) =>
+  relativeSigned == null ? null : wrapTo180(-relativeSigned);
+
 export default function PublicTelemetryPage() {
   const [catalog, setCatalog] = useState<CatalogRace[]>([]);
   const [mode, setMode] = useState<"live" | "history">("live");
@@ -64,6 +80,8 @@ export default function PublicTelemetryPage() {
   const [data, setData] = useState<PublicRaceData | null>(null);
   const [teamCd, setTeamCd] = useState("");
   const [history, setHistory] = useState<PublicAthlete[]>([]);
+  const [windWindow, setWindWindow] = useState<WindWindow>("realtime");
+  const [windRows, setWindRows] = useState<PublicWindRow[]>([]);
   const [message, setMessage] = useState("กำลังโหลดรายการที่อนุญาตให้บุคคลทั่วไปดู…");
 
   const modeRaces = useMemo(() => catalog.filter((item) => item.public_mode === mode), [catalog, mode]);
@@ -118,6 +136,28 @@ export default function PublicTelemetryPage() {
     const timer = window.setInterval(() => void loadRace(), 2000);
     return () => window.clearInterval(timer);
   }, [loadRace, mode, raceCd]);
+
+  const loadWind = useCallback(async () => {
+    if (mode !== "live" || !raceCd) return setWindRows([]);
+    const supabase = createClient();
+    const {data: rows, error} = await supabase.rpc("get_public_wind_history", {
+      p_race_cd: raceCd,
+      p_minutes: windWindow === "realtime" ? 1 : Number(windWindow),
+    });
+    if (error) {
+      const fallback = data?.wind ? [data.wind] : [];
+      return setWindRows(fallback);
+    }
+    const cutoff = Date.now() - windWindowMs(windWindow);
+    setWindRows(((rows || []) as PublicWindRow[]).filter((row) => row.captured_at_ms >= cutoff));
+  }, [data?.wind, mode, raceCd, windWindow]);
+
+  useEffect(() => {
+    void loadWind();
+    if (mode !== "live" || !raceCd) return;
+    const timer = window.setInterval(() => void loadWind(), 2000);
+    return () => window.clearInterval(timer);
+  }, [loadWind, mode, raceCd]);
 
   useEffect(() => {
     const firstTeam = data?.athletes[0]?.team_cd || "";
@@ -174,16 +214,34 @@ export default function PublicTelemetryPage() {
           <Metric icon={<Activity/>} label="สถานะข้อมูล" value={freshness(data.wind?.updated_at).label} sub={mode === "live" ? "อัปเดตทุก 2 วินาที" : "ข้อมูลสุดท้ายของรอบ"}/>
         </section>
 
-        {mode === "live" ? <section className="public-table-card">
-          <h3>ผลงานนักกีฬา</h3>
-          <div className="public-table-head"><span>ใบเรือ / นักกีฬา</span><span>ความเร็ว (SOG)</span><span>ทิศทาง (COG)</span><span>มุมเทียบลม</span><span>ความเร็วเข้าหาลม</span></div>
-          {data.athletes.map((item) => <div className="public-table-row" key={item.team_cd}>
-            <span><b>{item.sail_no || "—"}</b><i>{item.team_name || item.team_cd} · {item.nationality || "—"}</i></span>
-            <span>{number(item.sog_knots)} <small>นอต</small></span><span>{number(item.cog_degree, 0)}°</span>
-            <span>{item.relative_angle_degree == null ? "—" : `${number(item.relative_angle_degree, 0)}°`}</span>
-            <span>{item.upwind_vmg_knots == null ? "—" : number(item.upwind_vmg_knots)}</span>
-          </div>)}
-        </section> : <section className="public-history-grid">
+        {mode === "live" ? <>
+          <section className="public-wind-card">
+            <div className="public-card-title"><h3>ตารางลมและทิศ</h3><div className="time-filter">
+              {windWindowOptions.map(([value, label]) => <button className={windWindow === value ? "active" : ""} key={value} onClick={() => setWindWindow(value)}>{label}</button>)}
+            </div></div>
+            <div className="public-wind-table">
+              <div className="public-wind-head"><span>เวลา</span><span>ความเร็วลม</span><span>ทิศลม</span><span>ชื่อทิศ</span></div>
+              {windRows.map((row) => <div className="public-wind-row" key={row.captured_at_ms}>
+                <span>{bangkokTime(row.captured_at_ms)}</span><span>{number(row.speed_knots)} <small>นอต</small></span>
+                <span>{number(row.direction_degree, 0)}°</span><span>{directionName(row.direction_degree)}</span>
+              </div>)}
+              {!windRows.length && <div className="public-chart-empty">รอข้อมูลลมจากทุ่นหลัก</div>}
+            </div>
+          </section>
+          <section className="public-table-card">
+            <h3>ทิศของนักกีฬาแต่ละคน</h3>
+            <div className="public-table-head"><span>เลขใบเรือ</span><span>ชื่อ</span><span>COG</span><span>SOG</span><span>ทิศทุ่น − COG</span></div>
+            {data.athletes.map((item) => {
+              const relative = buoyMinusCog(item.relative_signed_degree);
+              return <div className="public-table-row" key={item.team_cd}>
+                <span><b>{item.sail_no || "—"}</b></span><span>{item.team_name || item.team_cd}</span>
+                <span>{item.cog_degree == null ? "—" : `${number(item.cog_degree, 0)}°`}</span>
+                <span>{item.sog_knots == null ? "—" : `${number(item.sog_knots)} นอต`}</span>
+                <span className={relative == null ? "" : relative >= 0 ? "positive" : "negative"}>{relative == null ? "—" : `${relative > 0 ? "+" : ""}${number(relative, 0)}°`}</span>
+              </div>;
+            })}
+          </section>
+        </> : <section className="public-history-grid">
           <aside className="public-roster"><h3>นักกีฬา</h3>{data.athletes.map((item) => <button className={teamCd === item.team_cd ? "active" : ""} key={item.team_cd} onClick={() => setTeamCd(item.team_cd)}><b>{item.sail_no || "—"}</b><span>{item.team_name || item.team_cd}<small>{item.nationality || "—"}</small></span></button>)}</aside>
           <div className="public-history-panel"><h3>{selected?.team_name || "ข้อมูลนักกีฬาย้อนหลัง"}</h3>
             <div className="public-metrics compact">
@@ -195,7 +253,7 @@ export default function PublicTelemetryPage() {
           </div>
         </section>}
       </>}
-      <footer className="public-footer">มุมเส้นทางเทียบลม คำนวณจากทิศทางการเคลื่อนที่เทียบกับทิศลมจากทุ่น · ทิศทางการเคลื่อนที่ไม่ใช่ทิศหัวเรือ</footer>
+      <footer className="public-footer">ทิศทุ่น − COG แสดงค่าหลังปรับให้อยู่ระหว่าง −180° ถึง 180° · COG คือทิศทางการเคลื่อนที่ ไม่ใช่ทิศหัวเรือ</footer>
     </main>
   );
 }

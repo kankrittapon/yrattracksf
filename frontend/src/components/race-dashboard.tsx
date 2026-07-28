@@ -428,21 +428,41 @@ function Overview({race, collector, wind, athletes, liveCount, teamMap}: {
 function LiveRace({race, collector, wind, athletes, teamMap}: {
   race: Race; collector: Collector | null; wind: WindState | null; athletes: AthleteState[]; teamMap: Map<string, Team>;
 }) {
+  const [windWindow, setWindWindow] = useState<WindWindow>("realtime");
+  const [windRows, setWindRows] = useState<WindState[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const supabase = createClient();
+      let query = supabase.from("wind_readings")
+        .select("race_cd,wind_instrument_cd,captured_at_ms,speed_knots,direction_degree,latitude,longitude,created_at")
+        .eq("race_cd", race.race_cd)
+        .gte("captured_at_ms", Date.now() - windWindowMs(windWindow))
+        .order("captured_at_ms", {ascending: false})
+        .limit(1200);
+      if (race.main_wind_instrument_cd) query = query.eq("wind_instrument_cd", race.main_wind_instrument_cd);
+      const {data} = await query;
+      if (cancelled) return;
+      const rows = ((data || []) as Array<Omit<WindState, "updated_at"> & {created_at: string}>)
+        .map(({created_at, ...row}) => ({...row, updated_at: created_at}));
+      setWindRows(rows.length ? rows : wind ? [wind] : []);
+    };
+    void load();
+    const timer = window.setInterval(() => void load(), 2000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [race.main_wind_instrument_cd, race.race_cd, wind, windWindow]);
+
   return (
     <div className="live-layout">
       <section className="panel race-map-panel">
         <PanelTitle icon={<LocateFixed/>} title={`${race.name || "การแข่งขัน"} · สนามแข่งขัน`} meta={<StatusDot state={collector?.websocket_connected ? "live" : "offline"} label={collector?.websocket_connected ? "กำลังรับข้อมูล" : "ไม่ได้เชื่อมต่อ"}/>}/>
         <RaceMap athletes={athletes} wind={wind} teamMap={teamMap}/>
       </section>
-      <section className="panel live-wind-side">
-        <PanelTitle icon={<Wind/>} title="ลมขณะนี้" meta={null}/>
-        <div className="big-number">{number(wind?.speed_knots)}<small>นอต</small></div>
-        <div className="direction-row"><Compass/> {number(wind?.direction_degree, 0)}° · {directionName(wind?.direction_degree)}</div>
-        <p className="data-note">ทุ่นลมหลัก · {bangkokTime(wind?.captured_at_ms)}</p>
-      </section>
-      <section className="panel fleet-table-panel">
-        <PanelTitle icon={<Users/>} title="ข้อมูลนักกีฬา" meta={<span>ทิศทางการเคลื่อนที่ ไม่ใช่ทิศหัวเรือ</span>}/>
-        <AthleteTable athletes={athletes} teamMap={teamMap}/>
+      <WindTable rows={windRows} window={windWindow} onWindowChange={setWindWindow}/>
+      <section className="panel telemetry-table-panel">
+        <PanelTitle icon={<Users/>} title="ทิศของนักกีฬาแต่ละคน" meta={<span>คำนวณจากทิศทุ่น − COG</span>}/>
+        <AthleteDirectionTable athletes={athletes} teamMap={teamMap}/>
       </section>
     </div>
   );
@@ -707,6 +727,57 @@ function AthleteTable({athletes, teamMap}: {athletes: AthleteState[]; teamMap: M
       {!athletes.length && <div className="table-empty">รอข้อมูลนักกีฬา</div>}
     </div>
   );
+}
+
+type WindWindow = "realtime" | "3" | "5" | "10";
+const windWindowMs = (value: WindWindow) => value === "realtime" ? 30_000 : Number(value) * 60_000;
+const windWindowOptions: Array<[WindWindow, string]> = [
+  ["realtime", "เวลาจริง"], ["3", "3 นาที"], ["5", "5 นาที"], ["10", "10 นาที"],
+];
+const wrapTo180 = (value: number) => ((value + 180) % 360 + 360) % 360 - 180;
+const buoyMinusCog = (relativeSigned: number | null) =>
+  relativeSigned == null ? null : wrapTo180(-relativeSigned);
+
+function WindTable({rows, window, onWindowChange}: {
+  rows: WindState[]; window: WindWindow; onWindowChange: (value: WindWindow) => void;
+}) {
+  return <section className="panel telemetry-table-panel">
+    <PanelTitle icon={<Wind/>} title="ตารางลมและทิศ" meta={<span>{rows.length} จุดข้อมูล</span>}/>
+    <div className="time-filter" aria-label="ช่วงเวลาของข้อมูลลม">
+      {windWindowOptions.map(([value, label]) =>
+        <button className={window === value ? "active" : ""} key={value} onClick={() => onWindowChange(value)}>{label}</button>)}
+    </div>
+    <div className="wind-data-table">
+      <div className="wind-table-head"><span>เวลา</span><span>ความเร็วลม</span><span>ทิศลม</span><span>ชื่อทิศ</span></div>
+      {rows.map((row) => <div className="wind-table-row" key={`${row.wind_instrument_cd}-${row.captured_at_ms}`}>
+        <span>{bangkokTime(row.captured_at_ms)}</span>
+        <span>{number(row.speed_knots)} <small>นอต</small></span>
+        <span>{number(row.direction_degree, 0)}°</span>
+        <span>{directionName(row.direction_degree)}</span>
+      </div>)}
+      {!rows.length && <div className="table-empty">รอข้อมูลลมจากทุ่นหลัก</div>}
+    </div>
+  </section>;
+}
+
+function AthleteDirectionTable({athletes, teamMap}: {athletes: AthleteState[]; teamMap: Map<string, Team>}) {
+  return <div className="direction-athlete-table">
+    <div className="direction-table-head"><span>เลขใบเรือ</span><span>ชื่อ</span><span>COG</span><span>SOG</span><span>ทิศทุ่น − COG</span></div>
+    {athletes.map((athlete) => {
+      const team = teamMap.get(athlete.team_cd);
+      const relative = buoyMinusCog(athlete.relative_signed_degree);
+      return <div className="direction-table-row" key={athlete.team_cd}>
+        <span><b>{team?.sail_no || "—"}</b></span>
+        <span>{team?.team_name || athlete.team_cd.slice(0, 8)}</span>
+        <span>{athlete.cog_degree == null ? "—" : `${number(athlete.cog_degree, 0)}°`}</span>
+        <span>{athlete.sog_knots == null ? "—" : `${number(athlete.sog_knots)} นอต`}</span>
+        <span className={relative == null ? "" : relative >= 0 ? "positive" : "negative"}>
+          {relative == null ? "—" : `${relative > 0 ? "+" : ""}${number(relative, 0)}°`}
+        </span>
+      </div>;
+    })}
+    {!athletes.length && <div className="table-empty">รอข้อมูลนักกีฬา</div>}
+  </div>;
 }
 
 function Metric({label, value, sub, icon}: {label: string; value: string; sub: string; icon: React.ReactNode}) {
