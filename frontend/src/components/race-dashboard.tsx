@@ -162,16 +162,24 @@ export function RaceDashboard({section}: {section: Section}) {
     setCollector((data || null) as Collector | null);
   }, [raceCd]);
 
+  const [liveChannelHealthy, setLiveChannelHealthy] = useState(false);
   useEffect(() => {
     if (!raceCd) return;
+    setLiveChannelHealthy(false);
     const supabase = createClient();
     const channel = supabase.channel(`live:${raceCd}`)
       .on("postgres_changes", {event: "*", schema: "public", table: "live_athlete_state", filter: `race_cd=eq.${raceCd}`}, () => void reloadAthletes())
       .on("postgres_changes", {event: "*", schema: "public", table: "live_wind_state", filter: `race_cd=eq.${raceCd}`}, () => void reloadWind())
       .on("postgres_changes", {event: "*", schema: "public", table: "collector_status", filter: `race_cd=eq.${raceCd}`}, () => void reloadCollector())
-      .subscribe();
+      .subscribe((status) => setLiveChannelHealthy(status === "SUBSCRIBED"));
     return () => { void supabase.removeChannel(channel); };
   }, [raceCd, reloadAthletes, reloadWind, reloadCollector]);
+
+  // สำรองไว้เผื่อ Realtime ต่อไม่ติด (เช่นเครือข่ายบล็อก websocket) — poll เฉพาะตอน channel ไม่ healthy เท่านั้น
+  useVisibleInterval(() => {
+    if (!raceCd || liveChannelHealthy) return;
+    void reloadAthletes(); void reloadWind(); void reloadCollector();
+  }, 3000);
 
   const auditedRace = useRef("");
   useEffect(() => {
@@ -804,6 +812,7 @@ function LiveRace({race, collector, wind, athletes, teamMap}: {
 }) {
   const [windWindow, setWindWindow] = useState<WindWindow>("3");
   const [windRows, setWindRows] = useState<WindState[]>([]);
+  const [windChannelHealthy, setWindChannelHealthy] = useState(false);
 
   const loadWind = useCallback(async () => {
     const supabase = createClient();
@@ -820,7 +829,27 @@ function LiveRace({race, collector, wind, athletes, teamMap}: {
     setWindRows(rows.length ? rows : wind ? [wind] : []);
   }, [race.main_wind_instrument_cd, race.race_cd, wind, windWindow]);
   useEffect(() => { void loadWind(); }, [loadWind]);
-  useVisibleInterval(() => void loadWind(), 2000);
+
+  // Realtime: ต่อแถวลมใหม่เข้า windRows ทันทีที่ collector เขียนลง DB แทนการ query ใหม่ทั้งก้อนทุก 2 วินาที
+  useEffect(() => {
+    setWindChannelHealthy(false);
+    const supabase = createClient();
+    const channel = supabase.channel(`wind-readings:${race.race_cd}`)
+      .on("postgres_changes", {event: "INSERT", schema: "public", table: "wind_readings", filter: `race_cd=eq.${race.race_cd}`}, (payload) => {
+        const row = payload.new as Omit<WindState, "updated_at"> & {created_at: string};
+        if (race.main_wind_instrument_cd && row.wind_instrument_cd !== race.main_wind_instrument_cd) return;
+        setWindRows((current) => {
+          const cutoff = Date.now() - windWindowMs(windWindow);
+          const next = [{...row, updated_at: row.created_at}, ...current.filter((item) => item.captured_at_ms !== row.captured_at_ms)];
+          return next.filter((item) => item.captured_at_ms >= cutoff).slice(0, 1200);
+        });
+      })
+      .subscribe((status) => setWindChannelHealthy(status === "SUBSCRIBED"));
+    return () => { void supabase.removeChannel(channel); };
+  }, [race.race_cd, race.main_wind_instrument_cd, windWindow]);
+
+  // สำรองไว้เผื่อ Realtime ต่อไม่ติด
+  useVisibleInterval(() => { if (!windChannelHealthy) void loadWind(); }, 3000);
 
   return (
     <div className="live-layout">
