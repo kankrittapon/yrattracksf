@@ -802,7 +802,7 @@ function Overview({race, collector, wind, athletes, liveCount, teamMap}: {
 function LiveRace({race, collector, wind, athletes, teamMap}: {
   race: Race; collector: Collector | null; wind: WindState | null; athletes: AthleteState[]; teamMap: Map<string, Team>;
 }) {
-  const [windWindow, setWindWindow] = useState<WindWindow>("realtime");
+  const [windWindow, setWindWindow] = useState<WindWindow>("3");
   const [windRows, setWindRows] = useState<WindState[]>([]);
 
   const loadWind = useCallback(async () => {
@@ -830,7 +830,7 @@ function LiveRace({race, collector, wind, athletes, teamMap}: {
       </section>
       <WindTable rows={windRows} window={windWindow} onWindowChange={setWindWindow}/>
       <section className="panel telemetry-table-panel">
-        <PanelTitle icon={<Users/>} title="ทิศของนักกีฬาแต่ละคน" meta={<span>คำนวณจากทิศทุ่น − COG</span>}/>
+        <PanelTitle icon={<Users/>} title="ทิศของนักกีฬาแต่ละคน" meta={<span>คำนวณจาก COG เทียบทิศลมจริง</span>}/>
         <AthleteDirectionTable athletes={athletes} teamMap={teamMap}/>
       </section>
     </div>
@@ -931,7 +931,10 @@ function History({race, teams, role}: {race: Race; teams: Team[]; role: string})
     <div className="history-layout">
       <section className="panel replay-stage">
         <PanelTitle icon={<Clock3/>} title={`${race.name || "การแข่งขัน"} · ${race.rounds || "ย้อนหลัง"}`} meta={role === "admin" ? <button className="text-button" onClick={exportCsv}>ดาวน์โหลดตารางข้อมูล</button> : <span>เวลาอ้างอิงสากล</span>}/>
-        {current ? <RaceMap athletes={[current]} wind={null} teamMap={teamMap}/> : <div className="replay-placeholder"><Anchor/><h3>{selected ? `กำลังโหลด ${selected.team_name}` : "เลือกนักกีฬา"}</h3><p>เล่นข้อมูลทุกวินาที พร้อมทิศทางการเคลื่อนที่และความเร็วเข้าหาลม</p></div>}
+        {current ? <div className="replay-map-wrap">
+          <RaceMap athletes={[current]} wind={null} teamMap={teamMap}/>
+          <div className="replay-timestamp"><Clock3/><b>{bangkokDateTime(current.captured_at_ms)}</b></div>
+        </div> : <div className="replay-placeholder"><Anchor/><h3>{selected ? `กำลังโหลด ${selected.team_name}` : "เลือกนักกีฬา"}</h3><p>เล่นข้อมูลทุกวินาที พร้อมทิศทางการเคลื่อนที่และความเร็วเข้าหาลม</p></div>}
         <div className="replay-controls">
           <button aria-label="กลับไปจุดเริ่มต้น" onClick={() => setCursor(0)}><RotateCcw/></button>
           <button className="play" aria-label={playing ? "หยุดชั่วคราว" : "เล่นย้อนหลัง"} onClick={() => setPlaying((value) => !value)}>{playing ? <Square/> : <Play/>}</button>
@@ -996,10 +999,9 @@ function Compare({athletes, teamMap}: {athletes: AthleteState[]; teamMap: Map<st
             <div className={`sail-accent accent-${index + 1}`}/>
             <p>หมายเลขใบเรือ {team?.sail_no || "—"}</p><h2>{team?.team_name || athlete.team_cd}</h2>
             <div className="comparison-metrics">
-              <Metric label="ความเร็วเหนือพื้นน้ำ (SOG)" value={number(athlete.sog_knots)} sub="นอต" icon={<Gauge/>}/>
               <Metric label="ทิศทางการเคลื่อนที่ (COG)" value={`${number(athlete.cog_degree, 0)}°`} sub="องศา" icon={<Compass/>}/>
               <Metric label="มุมเส้นทางเทียบลม" value={`${number(athlete.relative_angle_degree, 0)}°`} sub="องศา" icon={<Wind/>}/>
-              <Metric label="ความเร็วเข้าหาลม (VMG)" value={number(athlete.upwind_vmg_knots)} sub="นอต" icon={<ArrowRight/>}/>
+              <Metric label="VMC" value={number(athlete.upwind_vmg_knots)} sub="นอต" icon={<ArrowRight/>}/>
             </div>
           </section>;
         })}
@@ -1064,16 +1066,15 @@ function RaceMap({athletes, wind, teamMap}: {athletes: AthleteState[]; wind: Win
 function AthleteTable({athletes, teamMap}: {athletes: AthleteState[]; teamMap: Map<string, Team>}) {
   return (
     <div className="athlete-table">
-      <div className="table-head"><span>ใบเรือ / นักกีฬา</span><span>ความเร็ว (SOG)</span><span>ทิศทาง (COG)</span><span>มุมเทียบลม</span><span>ความเร็วเข้าหาลม</span><span>สถานะ</span></div>
+      <div className="table-head"><span>ใบเรือ / นักกีฬา</span><span>ทิศทาง (COG)</span><span>มุมเทียบลม</span><span>VMC</span><span>สถานะ</span></div>
       {athletes.map((athlete) => {
         const team = teamMap.get(athlete.team_cd);
         const fresh = freshness(athlete.updated_at);
         return <div className="table-row" key={athlete.team_cd}>
           <span><b>{team?.sail_no || "—"}</b><i>{team?.team_name || athlete.team_cd.slice(0, 8)}</i></span>
-          <span>{number(athlete.sog_knots)}<small> นอต</small></span>
           <span>{number(athlete.cog_degree, 0)}°</span>
           <span>{number(athlete.relative_angle_degree, 0)}°</span>
-          <span className={(athlete.upwind_vmg_knots || 0) >= 0 ? "positive" : "negative"}>{number(athlete.upwind_vmg_knots)}</span>
+          <span className={(athlete.upwind_vmg_knots || 0) >= 0 ? "positive" : "negative"}>{number(athlete.upwind_vmg_knots)}<small> นอต</small></span>
           <span><StatusDot state={fresh.className} label={fresh.label}/></span>
         </div>;
       })}
@@ -1082,23 +1083,43 @@ function AthleteTable({athletes, teamMap}: {athletes: AthleteState[]; teamMap: M
   );
 }
 
-type WindWindow = "realtime" | "3" | "5" | "10";
-const windWindowMs = (value: WindWindow) => value === "realtime" ? 30_000 : Number(value) * 60_000;
+type WindWindow = "3" | "5" | "9" | "15";
+const windWindowMs = (value: WindWindow) => Number(value) * 60_000;
 const windWindowOptions: Array<[WindWindow, string]> = [
-  ["realtime", "เวลาจริง"], ["3", "3 นาที"], ["5", "5 นาที"], ["10", "10 นาที"],
+  ["3", "3 นาที"], ["5", "5 นาที"], ["9", "9 นาที"], ["15", "15 นาที"],
 ];
 const wrapTo180 = (value: number) => ((value + 180) % 360 + 360) % 360 - 180;
 const buoyMinusCog = (relativeSigned: number | null) =>
   relativeSigned == null ? null : wrapTo180(-relativeSigned);
 
+// ค่าเฉลี่ยของช่วงเวลาที่เลือก คำนวณฝั่ง client จากข้อมูลลมดิบที่ query มาแล้ว (ทิศใช้ circular mean กันปัญหาเฉลี่ยรอบ 360/0 องศา)
+function windAverage(rows: WindState[]) {
+  const speeds = rows.map((row) => row.speed_knots).filter((value): value is number => value != null);
+  const directions = rows.map((row) => row.direction_degree).filter((value): value is number => value != null);
+  const speed = speeds.length ? speeds.reduce((sum, value) => sum + value, 0) / speeds.length : null;
+  let direction: number | null = null;
+  if (directions.length) {
+    const sumSin = directions.reduce((sum, value) => sum + Math.sin(value * Math.PI / 180), 0);
+    const sumCos = directions.reduce((sum, value) => sum + Math.cos(value * Math.PI / 180), 0);
+    direction = (Math.atan2(sumSin, sumCos) * 180 / Math.PI + 360) % 360;
+  }
+  return {speed, direction};
+}
+
 function WindTable({rows, window, onWindowChange}: {
   rows: WindState[]; window: WindWindow; onWindowChange: (value: WindWindow) => void;
 }) {
+  const windowLabel = windWindowOptions.find(([value]) => value === window)?.[1] || "";
+  const avg = windAverage(rows);
   return <section className="panel telemetry-table-panel">
     <PanelTitle icon={<Wind/>} title="ตารางลมและทิศ" meta={<span>{rows.length} จุดข้อมูล</span>}/>
     <div className="time-filter" aria-label="ช่วงเวลาของข้อมูลลม">
       {windWindowOptions.map(([value, label]) =>
         <button className={window === value ? "active" : ""} key={value} onClick={() => onWindowChange(value)}>{label}</button>)}
+    </div>
+    <div className="wind-summary">
+      <div><small>ความเร็วลมเฉลี่ย · {windowLabel}</small><b>{number(avg.speed)}<span>นอต</span></b></div>
+      <div><small>ทิศลมเฉลี่ย · {windowLabel}</small><b>{number(avg.direction, 0)}°<span>{directionName(avg.direction)}</span></b></div>
     </div>
     <div className="wind-data-table">
       <div className="wind-table-head"><span>เวลา</span><span>ความเร็วลม</span><span>ทิศลม</span><span>ชื่อทิศ</span></div>
@@ -1115,7 +1136,7 @@ function WindTable({rows, window, onWindowChange}: {
 
 function AthleteDirectionTable({athletes, teamMap}: {athletes: AthleteState[]; teamMap: Map<string, Team>}) {
   return <div className="direction-athlete-table">
-    <div className="direction-table-head"><span>เลขใบเรือ</span><span>ชื่อ</span><span>COG</span><span>SOG</span><span>ทิศทุ่น − COG</span></div>
+    <div className="direction-table-head"><span>เลขใบเรือ</span><span>ชื่อ</span><span>COG</span><span>COG เทียบทิศลมจริง</span><span>VMC</span></div>
     {athletes.map((athlete) => {
       const team = teamMap.get(athlete.team_cd);
       const relative = buoyMinusCog(athlete.relative_signed_degree);
@@ -1123,10 +1144,10 @@ function AthleteDirectionTable({athletes, teamMap}: {athletes: AthleteState[]; t
         <span><b>{team?.sail_no || "—"}</b></span>
         <span>{team?.team_name || athlete.team_cd.slice(0, 8)}</span>
         <span>{athlete.cog_degree == null ? "—" : `${number(athlete.cog_degree, 0)}°`}</span>
-        <span>{athlete.sog_knots == null ? "—" : `${number(athlete.sog_knots)} นอต`}</span>
         <span className={relative == null ? "" : relative >= 0 ? "positive" : "negative"}>
           {relative == null ? "—" : `${relative > 0 ? "+" : ""}${number(relative, 0)}°`}
         </span>
+        <span>{athlete.upwind_vmg_knots == null ? "—" : `${number(athlete.upwind_vmg_knots)} นอต`}</span>
       </div>;
     })}
     {!athletes.length && <div className="table-empty">รอข้อมูลนักกีฬา</div>}

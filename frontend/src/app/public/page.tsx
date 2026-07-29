@@ -87,6 +87,7 @@ export default function PublicTelemetryPage() {
   const [windWindow, setWindWindow] = useState<WindWindow>("realtime");
   const [windRows, setWindRows] = useState<PublicWindRow[]>([]);
   const [message, setMessage] = useState("กำลังโหลดรายการที่อนุญาตให้บุคคลทั่วไปดู…");
+  const [lastReceivedAt, setLastReceivedAt] = useState<number | null>(null);
 
   const modeRaces = useMemo(() => catalog.filter((item) => item.public_mode === mode), [catalog, mode]);
   const matches = useMemo(
@@ -137,6 +138,7 @@ export default function PublicTelemetryPage() {
     const next = (result || null) as PublicRaceData | null;
     if (next && raceWind?.[0]) next.wind = raceWind[0] as PublicRaceData["wind"];
     setData(next);
+    if (next) setLastReceivedAt(Date.now());
     setMessage(result ? "" : "รอบนี้ไม่ได้รับอนุญาตให้แสดง");
   }, [raceCd]);
 
@@ -192,6 +194,8 @@ export default function PublicTelemetryPage() {
   }, 2000);
 
   const selected = data?.athletes.find((item) => item.team_cd === teamCd) || data?.athletes[0];
+  const hasLiveTelemetry = Boolean(data?.wind)
+    || Boolean(data?.athletes.some((item) => item.sog_knots != null || item.cog_degree != null));
 
   return (
     <main className="public-shell">
@@ -218,6 +222,7 @@ export default function PublicTelemetryPage() {
       {data && <>
         <section className="public-race-title">
           <div><small>{data.race.match_name}</small><h2>{data.race.class_name} · {data.race.rounds}</h2><span>{data.race.race_name}</span></div>
+          <div className="public-received-at"><small><Clock3 size={12}/> ได้รับข้อมูลล่าสุดเมื่อ</small><b>{bangkokTime(lastReceivedAt)}</b></div>
           <div><b>{data.athletes.length}</b><small>นักกีฬา</small></div>
         </section>
         {mode === "live" && data.race.status !== "99" && <section className={`public-track-card ${data.tracker_status?.track_open ? "open" : ""}`}>
@@ -226,6 +231,13 @@ export default function PublicTelemetryPage() {
             <div><small>สถานะระบบติดตาม</small><h3>{data.tracker_status?.track_open ? "ระบบติดตามเปิดแล้ว" : "กำลังเตรียมระบบติดตาม"}</h3></div>
           </div>
         </section>}
+        {mode === "live" && data.race.status === "50" && !hasLiveTelemetry && <div className="public-telemetry-notice">
+          <Activity/>
+          <div>
+            <b>ยังไม่มีข้อมูลตำแหน่ง ความเร็ว หรือลมส่งเข้ามา</b>
+            <span>สถานะ “ระบบติดตามเปิดแล้ว” ด้านบนเป็นสถานะอุปกรณ์ GPS เท่านั้น คนละระบบกับข้อมูลลมและความเร็วนักกีฬาที่แสดงด้านล่าง — หน้านี้จะอัปเดตให้อัตโนมัติทันทีที่มีข้อมูลส่งเข้ามา</span>
+          </div>
+        </div>}
         {(mode === "history" || data.race.status === "50") && <section className="public-metrics">
           <Metric icon={<Wind/>} label="ความเร็วลม" value={`${number(data.wind?.speed_knots)} นอต`} sub={bangkokTime(data.wind?.captured_at_ms)}/>
           <Metric icon={<Compass/>} label="ทิศที่ลมพัดมา" value={`${number(data.wind?.direction_degree, 0)}°`} sub={directionName(data.wind?.direction_degree)}/>
@@ -251,21 +263,21 @@ export default function PublicTelemetryPage() {
           </section>
           <section className="public-table-card">
             <h3>ทิศของนักกีฬาแต่ละคน</h3>
-            <div className="public-table-head"><span>เลขใบเรือ</span><span>ชื่อ</span><span>COG</span><span>SOG</span><span>ทิศทุ่น − COG</span></div>
+            <div className="public-table-head"><span>เลขใบเรือ</span><span>ชื่อ</span><span>COG</span><span>COG เทียบทิศลมจริง</span><span>VMC</span></div>
             {data.athletes.map((item) => {
               const relative = buoyMinusCog(item.relative_signed_degree);
               return <div className="public-table-row" key={item.team_cd}>
                 <span><b>{item.sail_no || "—"}</b></span><span>{item.team_name || item.team_cd}</span>
                 <span>{item.cog_degree == null ? "—" : `${number(item.cog_degree, 0)}°`}</span>
-                <span>{item.sog_knots == null ? "—" : `${number(item.sog_knots)} นอต`}</span>
                 <span className={relative == null ? "" : relative >= 0 ? "positive" : "negative"}>{relative == null ? "—" : `${relative > 0 ? "+" : ""}${number(relative, 0)}°`}</span>
+                <span>{item.upwind_vmg_knots == null ? "—" : `${number(item.upwind_vmg_knots)} นอต`}</span>
               </div>;
             })}
           </section>
           <AthleteDetail athletes={data.athletes} teamCd={teamCd} onSelect={setTeamCd} selected={selected} rows={history} live/>
         </> : <AthleteDetail athletes={data.athletes} teamCd={teamCd} onSelect={setTeamCd} selected={selected} rows={history}/>}
       </>}
-      <footer className="public-footer">ทิศทุ่น − COG แสดงค่าหลังปรับให้อยู่ระหว่าง −180° ถึง 180° · COG คือทิศทางการเคลื่อนที่ ไม่ใช่ทิศหัวเรือ</footer>
+      <footer className="public-footer">COG เทียบทิศลมจริง แสดงค่าหลังปรับให้อยู่ระหว่าง −180° ถึง 180° · COG คือทิศทางการเคลื่อนที่ ไม่ใช่ทิศหัวเรือ</footer>
     </main>
   );
 }
@@ -298,11 +310,11 @@ function AthleteDetail({
     </aside>
     <div className="public-history-panel"><h3>{selected?.team_name || "ข้อมูลนักกีฬา"}</h3>
       <div className="public-metrics compact">
-        <Metric icon={<Gauge/>} label="ความเร็วล่าสุด (SOG)" value={`${number(latest?.sog_knots)} นอต`} sub={`${rows.length} จุดข้อมูล`}/>
         <Metric icon={<Compass/>} label="ทิศทางล่าสุด (COG)" value={`${number(latest?.cog_degree, 0)}°`} sub={bangkokTime(latest?.captured_at_ms)}/>
         <Metric icon={<Wind/>} label="ความเร็วลมล่าสุด" value={`${number(latest?.wind_speed_knots)} นอต`} sub={directionName(latest?.wind_direction_degree)}/>
         <Metric icon={<Compass/>} label="ทิศลมล่าสุด" value={`${number(latest?.wind_direction_degree, 0)}°`} sub="ทิศที่ลมพัดมา"/>
         <Metric icon={<Wind/>} label="มุมเส้นทางเทียบลม" value={latest?.relative_angle_degree == null ? "—" : `${number(latest.relative_angle_degree, 0)}°`} sub="คำนวณจากทิศทางและลม"/>
+        <Metric icon={<Gauge/>} label="VMC ล่าสุด" value={`${number(latest?.upwind_vmg_knots)} นอต`} sub={`${rows.length} จุดข้อมูล`}/>
       </div>
       <HistoryChart rows={rows} live={live}/>
     </div>
