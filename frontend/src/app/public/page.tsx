@@ -145,7 +145,7 @@ export default function PublicTelemetryPage() {
   useEffect(() => { void loadRace(); }, [loadRace]);
   useVisibleInterval(() => {
     if (mode === "live" && raceCd) void loadRace();
-  }, 2000);
+  }, 1000);
 
   const loadWind = useCallback(async () => {
     if (mode !== "live" || !raceCd) return setWindRows([]);
@@ -165,7 +165,7 @@ export default function PublicTelemetryPage() {
   useEffect(() => { void loadWind(); }, [loadWind]);
   useVisibleInterval(() => {
     if (mode === "live" && raceCd) void loadWind();
-  }, 2000);
+  }, 1000);
 
   useEffect(() => {
     const firstTeam = data?.athletes[0]?.team_cd || "";
@@ -191,7 +191,7 @@ export default function PublicTelemetryPage() {
   useEffect(() => { void loadAthleteSeries(); }, [loadAthleteSeries]);
   useVisibleInterval(() => {
     if (mode === "live" && data?.race.status === "50" && teamCd) void loadAthleteSeries();
-  }, 2000);
+  }, 1000);
 
   const selected = data?.athletes.find((item) => item.team_cd === teamCd) || data?.athletes[0];
   const hasLiveTelemetry = Boolean(data?.wind)
@@ -241,7 +241,7 @@ export default function PublicTelemetryPage() {
         {(mode === "history" || data.race.status === "50") && <section className="public-metrics">
           <Metric icon={<Wind/>} label="ความเร็วลม" value={`${number(data.wind?.speed_knots)} นอต`} sub={bangkokTime(data.wind?.captured_at_ms)}/>
           <Metric icon={<Compass/>} label="ทิศที่ลมพัดมา" value={`${number(data.wind?.direction_degree, 0)}°`} sub={directionName(data.wind?.direction_degree)}/>
-          <Metric icon={<Activity/>} label="สถานะข้อมูล" value={freshness(data.wind?.updated_at).label} sub={mode === "live" ? "อัปเดตทุก 2 วินาที" : "ข้อมูลสุดท้ายของรอบ"}/>
+          <Metric icon={<Activity/>} label="สถานะข้อมูล" value={freshness(data.wind?.updated_at).label} sub={mode === "live" ? "อัปเดตทุก 1 วินาที" : "ข้อมูลสุดท้ายของรอบ"}/>
         </section>}
 
         {mode === "live" && data.race.status !== "50" ? <section className="public-waiting-card">
@@ -326,5 +326,5 @@ function HistoryChart({rows, live = false}: {rows: PublicAthlete[]; live?: boole
   const values = rows.map((row) => row.sog_knots || 0);
   const max = Math.max(...values, 1);
   const points = values.map((value, index) => `${index / Math.max(values.length - 1, 1) * 100},${94 - value / max * 82}`).join(" ");
-  return <div className="public-chart"><div><b>ความเร็วตามเวลา</b><span>{live ? "อัปเดตทุก 2 วินาที · " : ""}แสดงหนึ่งจุดทุก 5 วินาที</span></div><svg viewBox="0 0 100 100" preserveAspectRatio="none"><polyline points={points}/></svg></div>;
+  return <div className="public-chart"><div><b>ความเร็วตามเวลา</b><span>{live ? "อัปเดตทุก 1 วินาที · " : ""}แสดงหนึ่งจุดทุก 5 วินาที</span></div><svg viewBox="0 0 100 100" preserveAspectRatio="none"><polyline points={points}/></svg></div>;
 }
