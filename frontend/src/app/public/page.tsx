@@ -3,7 +3,8 @@
 import {useCallback, useEffect, useMemo, useState} from "react";
 import {Activity, Anchor, Clock3, Compass, Gauge, Radio, Satellite, Wind} from "lucide-react";
 import {createClient} from "@/lib/supabase/client";
-import {bangkokTime, directionName, freshness, number} from "@/lib/format";
+import {bangkokTime, directionName, freshness, mapErrorMessage, number} from "@/lib/format";
+import {useVisibleInterval} from "@/lib/use-visible-interval";
 
 interface CatalogRace {
   match_cd: string;
@@ -105,7 +106,7 @@ export default function PublicTelemetryPage() {
   useEffect(() => {
     const supabase = createClient();
     void supabase.rpc("get_public_race_catalog").then(({data: rows, error}) => {
-      if (error) return setMessage(`ยังเปิดหน้าสาธารณะไม่ได้: ${error.message}`);
+      if (error) return setMessage(`ยังเปิดหน้าสาธารณะไม่ได้: ${mapErrorMessage(error)}`);
       const next = (rows || []) as CatalogRace[];
       setCatalog(next);
       setMessage(next.length ? "" : "ยังไม่มีประเภทเรือที่ผู้ดูแลอนุญาตให้บุคคลทั่วไปดู");
@@ -132,7 +133,7 @@ export default function PublicTelemetryPage() {
       supabase.rpc("get_public_race", {p_race_cd: raceCd}),
       supabase.rpc("get_public_race_wind", {p_race_cd: raceCd}),
     ]);
-    if (error) return setMessage(error.message);
+    if (error) return setMessage(mapErrorMessage(error));
     const next = (result || null) as PublicRaceData | null;
     if (next && raceWind?.[0]) next.wind = raceWind[0] as PublicRaceData["wind"];
     setData(next);
@@ -140,11 +141,9 @@ export default function PublicTelemetryPage() {
   }, [raceCd]);
 
   useEffect(() => { void loadRace(); }, [loadRace]);
-  useEffect(() => {
-    if (mode !== "live" || !raceCd) return;
-    const timer = window.setInterval(() => void loadRace(), 2000);
-    return () => window.clearInterval(timer);
-  }, [loadRace, mode, raceCd]);
+  useVisibleInterval(() => {
+    if (mode === "live" && raceCd) void loadRace();
+  }, 2000);
 
   const loadWind = useCallback(async () => {
     if (mode !== "live" || !raceCd) return setWindRows([]);
@@ -161,12 +160,10 @@ export default function PublicTelemetryPage() {
     setWindRows(((rows || []) as PublicWindRow[]).filter((row) => row.captured_at_ms >= cutoff));
   }, [data?.wind, mode, raceCd, windWindow]);
 
-  useEffect(() => {
-    void loadWind();
-    if (mode !== "live" || !raceCd) return;
-    const timer = window.setInterval(() => void loadWind(), 2000);
-    return () => window.clearInterval(timer);
-  }, [loadWind, mode, raceCd]);
+  useEffect(() => { void loadWind(); }, [loadWind]);
+  useVisibleInterval(() => {
+    if (mode === "live" && raceCd) void loadWind();
+  }, 2000);
 
   useEffect(() => {
     const firstTeam = data?.athletes[0]?.team_cd || "";
@@ -185,16 +182,14 @@ export default function PublicTelemetryPage() {
       p_to_ms: null,
       p_sample_seconds: 5,
     });
-    if (error) return setMessage(error.message);
+    if (error) return setMessage(mapErrorMessage(error));
     setHistory((rows || []) as PublicAthlete[]);
   }, [data?.race.status, mode, raceCd, teamCd]);
 
   useEffect(() => { void loadAthleteSeries(); }, [loadAthleteSeries]);
-  useEffect(() => {
-    if (mode !== "live" || data?.race.status !== "50" || !teamCd) return;
-    const timer = window.setInterval(() => void loadAthleteSeries(), 2000);
-    return () => window.clearInterval(timer);
-  }, [data?.race.status, loadAthleteSeries, mode, teamCd]);
+  useVisibleInterval(() => {
+    if (mode === "live" && data?.race.status === "50" && teamCd) void loadAthleteSeries();
+  }, 2000);
 
   const selected = data?.athletes.find((item) => item.team_cd === teamCd) || data?.athletes[0];
 

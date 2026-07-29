@@ -5,12 +5,14 @@ import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {
   Activity, AlertTriangle, Anchor, ArrowRight, CheckCircle2, ChevronDown, ClipboardCheck,
   Clock3, Compass, Database, Gauge, LocateFixed, LockKeyhole, Play,
-  Radio, RefreshCw, RotateCcw, Settings2, ShieldCheck, Square, Users, Wind,
+  Radio, RefreshCw, RotateCcw, ShieldCheck, Square, Users, Wind,
 } from "lucide-react";
 import {createClient} from "@/lib/supabase/client";
-import {bangkokTime, directionName, freshness, number} from "@/lib/format";
+import {bangkokDateTime, bangkokTime, directionName, freshness, mapErrorMessage, number} from "@/lib/format";
+import {useVisibleInterval} from "@/lib/use-visible-interval";
+import {ReasonDialog} from "@/components/reason-dialog";
 import type {
-  AthleteState, Collector, HistoryImport, Match, Race, RaceClass, Section, Team, WindState,
+  AthleteState, Collector, HistoryImport, Match, Race, Section, Team, WindState,
 } from "@/types/dashboard";
 
 interface QualityEvent {
@@ -37,7 +39,7 @@ const titles: Record<Section, [string, string]> = {
   compare: ["เปรียบเทียบนักกีฬา", "เปรียบเทียบเส้นทาง ความเร็ว และมุมเทียบลม"],
   control: ["ควบคุมการเก็บข้อมูล", "เริ่ม หยุด และตรวจการเก็บข้อมูลผ่าน Tailscale"],
   quality: ["ตรวจสอบคุณภาพข้อมูล", "ตรวจข้อมูลล่าช้า ข้อมูลขาด และปัญหาการเชื่อมต่อ"],
-  settings: ["ตั้งค่าระบบ", "ตั้งค่าทุ่นลม เวลา การเก็บข้อมูล และสิทธิ์การเผยแพร่"],
+  settings: ["เผยแพร่สู่สาธารณะ", "เปิด/ปิดการเผยแพร่รายการแข่งขันและประเภทเรือให้บุคคลทั่วไปดู"],
 };
 
 const collectorState: Record<string, string> = {
@@ -74,6 +76,12 @@ const raceStatusLabel: Record<string, string> = {
   "99": "จบการแข่งขันแล้ว",
 };
 
+const tokenSourceLabel: Record<string, string> = {
+  automatic: "อัตโนมัติจาก SailFish",
+  environment: "ค่าสำรองใน .env",
+  unavailable: "หาไม่ได้",
+};
+
 export function RaceDashboard({section}: {section: Section}) {
   const [races, setRaces] = useState<Race[]>([]);
   const [raceCd, setRaceCd] = useState("");
@@ -84,22 +92,20 @@ export function RaceDashboard({section}: {section: Section}) {
   const [quality, setQuality] = useState<QualityEvent[]>([]);
   const [role, setRole] = useState("viewer");
   const [loading, setLoading] = useState(true);
-  const [notice, setNotice] = useState("");
-  const [historyImport, setHistoryImport] = useState<HistoryImport | null>(null);
   const [matchFilter, setMatchFilter] = useState("");
   const [classFilter, setClassFilter] = useState("");
 
   const load = useCallback(async () => {
+    if (section === "control" || section === "history" || section === "settings") {
+      setLoading(false);
+      return;
+    }
     const supabase = createClient();
     const {data: raceRows} = await supabase.from("races")
       .select("*,match:matches(name),race_class:race_classes(name)")
       .order("updated_at", {ascending: false});
     const allRaces = (raceRows || []) as unknown as Race[];
     const nextRaces = allRaces.filter((item) => {
-      if (section === "history") {
-        return item.sailfish_status === "99" && Boolean(item.history_imported_at);
-      }
-      if (section === "control" || section === "settings") return true;
       if (section === "live") {
         return item.sailfish_status === "50"
           || (item.sailfish_status === "10" && Boolean(item.collection_enabled));
@@ -116,14 +122,13 @@ export function RaceDashboard({section}: {section: Section}) {
       return;
     }
     const {data: {user}} = await supabase.auth.getUser();
-    const [teamResult, athleteResult, windResult, collectorResult, qualityResult, profileResult, importResult] = await Promise.all([
+    const [teamResult, athleteResult, windResult, collectorResult, qualityResult, profileResult] = await Promise.all([
       supabase.from("teams").select("*").eq("race_cd", selected),
       supabase.from("live_athlete_state").select("*").eq("race_cd", selected).order("captured_at_ms", {ascending: false}),
       supabase.from("live_wind_state").select("*").eq("race_cd", selected).order("captured_at_ms", {ascending: false}).limit(1).maybeSingle(),
       supabase.from("collector_status").select("*").eq("race_cd", selected).maybeSingle(),
       supabase.from("data_quality_events").select("*").eq("race_cd", selected).order("created_at", {ascending: false}).limit(30),
       user ? supabase.from("profiles").select("role").eq("id", user.id).maybeSingle() : Promise.resolve({data: null}),
-      supabase.from("history_imports").select("*").eq("race_cd", selected).maybeSingle(),
     ]);
     setTeams((teamResult.data || []) as Team[]);
     setAthletes((athleteResult.data || []) as AthleteState[]);
@@ -131,21 +136,42 @@ export function RaceDashboard({section}: {section: Section}) {
     setCollector((collectorResult.data || null) as Collector | null);
     setQuality((qualityResult.data || []) as QualityEvent[]);
     setRole(profileResult.data?.role || "viewer");
-    setHistoryImport((importResult.data || null) as HistoryImport | null);
     setLoading(false);
   }, [raceCd, section]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // แทนที่จะ reload ทั้งหมด (races+teams+athletes+wind+collector+quality+profile) ทุกครั้งที่มี event
+  // อัปเดตเฉพาะตารางที่เปลี่ยนจริง ลดภาระตอนแข่งจริงที่ event มาถี่ระดับวินาที
+  const reloadAthletes = useCallback(async () => {
+    if (!raceCd) return;
+    const supabase = createClient();
+    const {data} = await supabase.from("live_athlete_state").select("*").eq("race_cd", raceCd).order("captured_at_ms", {ascending: false});
+    setAthletes((data || []) as AthleteState[]);
+  }, [raceCd]);
+  const reloadWind = useCallback(async () => {
+    if (!raceCd) return;
+    const supabase = createClient();
+    const {data} = await supabase.from("live_wind_state").select("*").eq("race_cd", raceCd).order("captured_at_ms", {ascending: false}).limit(1).maybeSingle();
+    setWind((data || null) as WindState | null);
+  }, [raceCd]);
+  const reloadCollector = useCallback(async () => {
+    if (!raceCd) return;
+    const supabase = createClient();
+    const {data} = await supabase.from("collector_status").select("*").eq("race_cd", raceCd).maybeSingle();
+    setCollector((data || null) as Collector | null);
+  }, [raceCd]);
+
   useEffect(() => {
     if (!raceCd) return;
     const supabase = createClient();
     const channel = supabase.channel(`live:${raceCd}`)
-      .on("postgres_changes", {event: "*", schema: "public", table: "live_athlete_state", filter: `race_cd=eq.${raceCd}`}, () => void load())
-      .on("postgres_changes", {event: "*", schema: "public", table: "live_wind_state", filter: `race_cd=eq.${raceCd}`}, () => void load())
-      .on("postgres_changes", {event: "*", schema: "public", table: "collector_status", filter: `race_cd=eq.${raceCd}`}, () => void load())
+      .on("postgres_changes", {event: "*", schema: "public", table: "live_athlete_state", filter: `race_cd=eq.${raceCd}`}, () => void reloadAthletes())
+      .on("postgres_changes", {event: "*", schema: "public", table: "live_wind_state", filter: `race_cd=eq.${raceCd}`}, () => void reloadWind())
+      .on("postgres_changes", {event: "*", schema: "public", table: "collector_status", filter: `race_cd=eq.${raceCd}`}, () => void reloadCollector())
       .subscribe();
     return () => { void supabase.removeChannel(channel); };
-  }, [raceCd, load]);
+  }, [raceCd, reloadAthletes, reloadWind, reloadCollector]);
 
   const auditedRace = useRef("");
   useEffect(() => {
@@ -192,55 +218,6 @@ export function RaceDashboard({section}: {section: Section}) {
   }
   if (section === "settings") {
     return <><SectionHeading section={section}/><PublishingWorkspace/></>;
-  }
-
-  async function control(action: "arm" | "start-override" | "stop" | "retry") {
-    setNotice("กำลังเชื่อมต่อ ai-brain ผ่าน Tailscale…");
-    const api = process.env.NEXT_PUBLIC_CONTROL_API_URL;
-    if (!api) return setNotice("ยังไม่ได้ตั้งค่าที่อยู่ระบบควบคุม");
-    const supabase = createClient();
-    const {data: {session}} = await supabase.auth.getSession();
-    if (!session) return setNotice("การเข้าสู่ระบบหมดอายุ กรุณาเข้าสู่ระบบใหม่");
-    const reason = action === "arm" || action === "retry"
-      ? "สั่งงานจากหน้าควบคุม"
-      : window.prompt("กรุณาระบุเหตุผลในการสั่งงาน", "") || "";
-    if ((action === "start-override" || action === "stop") && reason.length < 3) {
-      return setNotice("ต้องระบุเหตุผลอย่างน้อย 3 ตัวอักษร");
-    }
-    try {
-      const response = await fetch(`${api.replace(/\/$/, "")}/collectors/${raceCd}/${action}`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({reason}),
-      });
-      if (!response.ok) throw new Error((await response.json()).detail || `HTTP ${response.status}`);
-      setCollector(await response.json());
-      setNotice(`${actionName[action]}สำเร็จ`);
-    } catch (error) {
-      setNotice(`เชื่อมต่อไม่ได้ — กรุณาเชื่อม Tailscale (${String(error)})`);
-    }
-  }
-
-  async function importHistoryNow() {
-    setNotice("กำลังสั่งนำเข้าข้อมูลย้อนหลังทันที…");
-    const api = process.env.NEXT_PUBLIC_CONTROL_API_URL;
-    const supabase = createClient();
-    const {data: {session}} = await supabase.auth.getSession();
-    if (!api || !session) return setNotice("ต้องเข้าสู่ระบบและเชื่อม Tailscale ก่อน");
-    try {
-      const response = await fetch(`${api.replace(/\/$/, "")}/history-imports/${raceCd}/retry`, {
-        method: "POST",
-        headers: {Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json"},
-      });
-      if (!response.ok) throw new Error((await response.json()).detail || `HTTP ${response.status}`);
-      setNotice("เริ่มนำเข้าข้อมูลย้อนหลังแล้ว หน้านี้จะแสดงความคืบหน้า");
-      await load();
-    } catch (error) {
-      setNotice(`สั่งนำเข้าไม่สำเร็จ — ${String(error)}`);
-    }
   }
 
   return (
@@ -355,8 +332,10 @@ function MatchControlWorkspace() {
   const [matchCd, setMatchCd] = useState("");
   const [classFilter, setClassFilter] = useState("");
   const [busy, setBusy] = useState("");
+  const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("เลือกหรือค้นหารายการแข่งขัน แล้ว Sync เพื่อดูประเภทเรือและรอบทั้งหมด");
   const [newRaces, setNewRaces] = useState<Set<string>>(new Set());
+  const [pendingAction, setPendingAction] = useState<{race: Race; action: "start-override" | "stop"} | null>(null);
 
   const reload = useCallback(async () => {
     const next = await loadWorkspaceData();
@@ -367,16 +346,15 @@ function MatchControlWorkspace() {
         : next.matches.some((item) => item.match_cd === saved) ? saved!
         : next.matches[0]?.match_cd || current;
     });
+    setLoading(false);
   }, []);
   useEffect(() => { void reload(); }, [reload]);
-  useEffect(() => {
-    const timer = window.setInterval(() => void reload(), 5000);
-    return () => window.clearInterval(timer);
-  }, [reload]);
+  useVisibleInterval(() => void reload(), 5000);
   useEffect(() => {
     if (matchCd) window.localStorage.setItem("sailfish-control-match", matchCd);
     setClassFilter("");
   }, [matchCd]);
+  const isAdmin = data.role === "admin";
 
   const options = useMemo(() => {
     const map = new Map(data.matches.map((item) => [item.match_cd, readableMatchName(item.match_cd, item.name, data.races)]));
@@ -407,7 +385,7 @@ function MatchControlWorkspace() {
       setNotice(items.length ? `พบ ${items.length} รายการแข่งขัน` : "ไม่พบรายการแข่งขันในบัญชี SailFish");
       await reload();
     } catch (error) {
-      setNotice(`ค้นหาไม่สำเร็จ — ${String(error)}`);
+      setNotice(`ค้นหาไม่สำเร็จ — ${mapErrorMessage(error)}`);
     } finally { setBusy(""); }
   }
 
@@ -422,22 +400,27 @@ function MatchControlWorkspace() {
       setNotice(`อัปเดตแล้ว ${incoming.length} รอบ · รอเริ่ม ${body.waiting?.length || 0} · กำลังแข่ง ${body.active?.length || 0} · จบแล้ว ${body.finished?.length || 0}`);
       await reload();
     } catch (error) {
-      setNotice(`Sync ไม่สำเร็จ — ${String(error)}`);
+      setNotice(`Sync ไม่สำเร็จ — ${mapErrorMessage(error)}`);
     } finally { setBusy(""); }
   }
 
-  async function roundAction(race: Race, action: "arm" | "start-override" | "stop" | "retry") {
-    const needsReason = action === "start-override" || action === "stop";
-    const reason = needsReason ? window.prompt("กรุณาระบุเหตุผล", "") || "" : "สั่งงานจากหน้าควบคุม";
-    if (needsReason && reason.length < 3) return setNotice("ต้องระบุเหตุผลอย่างน้อย 3 ตัวอักษร");
+  async function runRoundAction(race: Race, action: "arm" | "start-override" | "stop" | "retry", reason: string) {
     setBusy(race.race_cd);
     try {
       await adminRequest(`/collectors/${race.race_cd}/${action}`, {method: "POST", body: JSON.stringify({reason})});
       setNotice(`${actionName[action]} ${classNameOf(race)} ${race.rounds || ""} สำเร็จ`);
       await reload();
     } catch (error) {
-      setNotice(`สั่งงานไม่สำเร็จ — ${String(error)}`);
+      setNotice(`สั่งงานไม่สำเร็จ — ${mapErrorMessage(error)}`);
     } finally { setBusy(""); }
+  }
+
+  function roundAction(race: Race, action: "arm" | "start-override" | "stop" | "retry") {
+    if (action === "start-override" || action === "stop") {
+      setPendingAction({race, action});
+      return;
+    }
+    void runRoundAction(race, action, "สั่งงานจากหน้าควบคุม");
   }
 
   async function togglePublicScope() {
@@ -454,20 +437,34 @@ function MatchControlWorkspace() {
       setNotice(`${!scopeEnabled ? "เปิด" : "ปิด"} หน้าสาธารณะ${classFilter ? `เฉพาะ ${scopeLabel}` : "ทุกประเภท"}แล้ว · รอบที่จบจะหยุดการถ่ายทอดสดและรอรอบถัดไป`);
       await reload();
     } catch (error) {
-      setNotice(`ตั้งค่า Public ไม่สำเร็จ — ${String(error)}`);
+      setNotice(`ตั้งค่า Public ไม่สำเร็จ — ${mapErrorMessage(error)}`);
     } finally { setBusy(""); }
   }
 
+  if (loading) return <LoadingState/>;
+
   return <div className="match-workspace">
+    {pendingAction && <ReasonDialog
+      title={`${actionName[pendingAction.action]} · ${classNameOf(pendingAction.race)} ${pendingAction.race.rounds || ""}`}
+      description="ระบุเหตุผลที่สั่งงานนี้ เพื่อบันทึกไว้ตรวจสอบภายหลัง"
+      confirmLabel="ยืนยันคำสั่ง"
+      onCancel={() => setPendingAction(null)}
+      onConfirm={(reason) => {
+        const {race, action} = pendingAction;
+        setPendingAction(null);
+        void runRoundAction(race, action, reason);
+      }}
+    />}
     <section className="panel match-toolbar">
       <div className="control-lock"><LockKeyhole/><div><b>ควบคุมผ่าน TAILSCALE</b><span>เลือกรายการแข่งขันก่อน แล้วจัดการแต่ละรอบแยกกัน</span></div></div>
+      {!isAdmin && <div className="role-notice"><ShieldCheck/> เฉพาะผู้ดูแลระบบ (admin) เท่านั้นที่สั่งเริ่ม/หยุดการเก็บข้อมูลได้ — บัญชีนี้ดูสถานะได้อย่างเดียว</div>}
       <div className="match-picker-row">
         <label>รายการแข่งขัน<select value={matchCd} onChange={(event) => setMatchCd(event.target.value)}>
           {!options.length && <option value="">ยังไม่มีรายการ</option>}
           {options.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
         </select></label>
-        <button disabled={Boolean(busy)} onClick={discoverMatches}><Database/> ค้นหารายการ</button>
-        <button className="primary-match-action" disabled={Boolean(busy) || !matchCd} onClick={syncMatch}><RefreshCw/> {busy === "sync" ? "กำลัง Sync…" : matchRaces.length ? "Sync หารอบใหม่" : "นำเข้ารายการ"}</button>
+        <button disabled={Boolean(busy) || !isAdmin} onClick={discoverMatches}><Database/> ค้นหารายการ</button>
+        <button className="primary-match-action" disabled={Boolean(busy) || !matchCd || !isAdmin} onClick={syncMatch}><RefreshCw/> {busy === "sync" ? "กำลัง Sync…" : matchRaces.length ? "Sync หารอบใหม่" : "นำเข้ารายการ"}</button>
       </div>
       <div className="control-notice">{notice}</div>
     </section>
@@ -485,9 +482,11 @@ function MatchControlWorkspace() {
         </div>
         <div className="public-scope-action">
           <span><b>อนุญาตให้คนทั่วไปดู</b><small>ขอบเขต: {scopeLabel} · เมื่อจบรอบจะหยุดถ่ายทอดสดอัตโนมัติ</small></span>
-          <button className={scopeEnabled ? "enabled" : ""} disabled={Boolean(busy)} onClick={togglePublicScope}>
-            <ShieldCheck/> {scopeEnabled ? `ปิดหน้าสาธารณะ · ${scopeLabel}` : `เปิดหน้าสาธารณะ · ${scopeLabel}`}
-          </button>
+          {isAdmin ? (
+            <button className={scopeEnabled ? "enabled" : ""} disabled={Boolean(busy)} onClick={togglePublicScope}>
+              <ShieldCheck/> {scopeEnabled ? `ปิดหน้าสาธารณะ · ${scopeLabel}` : `เปิดหน้าสาธารณะ · ${scopeLabel}`}
+            </button>
+          ) : <span className="finished-copy">ต้องเป็นผู้ดูแลระบบ</span>}
         </div>
       </div>
       {groups.map(([levelCd, label]) => <section className="panel class-race-group" key={levelCd}>
@@ -496,12 +495,19 @@ function MatchControlWorkspace() {
           const status = collectorMap.get(race.race_cd);
           const running = race.collection_enabled || Boolean(status && !["idle", "completed", "error"].includes(status.state));
           return <div className="round-control-row" key={race.race_cd}>
-            <div><b>{race.rounds || race.name || "ไม่ระบุรอบ"}</b><span>{raceStatusLabel[race.sailfish_status || ""] || "ไม่ทราบสถานะ"} · {bangkokTime(race.start_at)}</span></div>
+            <div><b>{race.rounds || race.name || "ไม่ระบุรอบ"}</b><span>{raceStatusLabel[race.sailfish_status || ""] || "ไม่ทราบสถานะ"} · {bangkokDateTime(race.start_at)}</span></div>
             <div className="round-badges">{newRaces.has(race.race_cd) && <i className="new-badge">รอบใหม่</i>}<i className={`race-status status-${race.sailfish_status}`}>{collectorState[status?.state || "idle"]}</i></div>
             <div className="round-actions">
-              {race.sailfish_status !== "99" && !running && <button disabled={busy === race.race_cd} onClick={() => roundAction(race, "arm")}><Radio/> เตรียมเก็บข้อมูล</button>}
-              {running && <><button onClick={() => roundAction(race, "start-override")}><Play/> เริ่มด้วยตนเอง</button><button onClick={() => roundAction(race, "retry")}><RefreshCw/> ลองใหม่</button><button className="danger" onClick={() => roundAction(race, "stop")}><Square/> หยุด</button></>}
-              {race.sailfish_status === "99" && <span className="finished-copy">ไปหน้า “ผลย้อนหลัง” เพื่อนำเข้าข้อมูล</span>}
+              {race.sailfish_status === "99" ? <span className="finished-copy">ไปหน้า “ผลย้อนหลัง” เพื่อนำเข้าข้อมูล</span>
+                : !isAdmin ? <span className="finished-copy">ต้องเป็นผู้ดูแลระบบจึงจะสั่งงานได้</span>
+                : <>
+                  {!running && <button disabled={busy === race.race_cd} onClick={() => roundAction(race, "arm")}><Radio/> เตรียมเก็บข้อมูล</button>}
+                  {running && <>
+                    <button disabled={busy === race.race_cd} onClick={() => roundAction(race, "start-override")}><Play/> เริ่มด้วยตนเอง</button>
+                    <button disabled={busy === race.race_cd} onClick={() => roundAction(race, "retry")}><RefreshCw/> ลองใหม่</button>
+                    <button className="danger" disabled={busy === race.race_cd} onClick={() => roundAction(race, "stop")}><Square/> หยุด</button>
+                  </>}
+                </>}
             </div>
           </div>;
         })}
@@ -523,18 +529,17 @@ function HistoryWorkspace() {
   const [teams, setTeams] = useState<Team[]>([]);
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
   const reload = useCallback(async () => {
     const next = await loadWorkspaceData();
     setData(next);
     setMatchCd((current) => next.matches.some((item) => item.match_cd === current)
       ? current
       : next.matches[0]?.match_cd || "");
+    setLoading(false);
   }, []);
   useEffect(() => { void reload(); }, [reload]);
-  useEffect(() => {
-    const timer = window.setInterval(() => void reload(), 5000);
-    return () => window.clearInterval(timer);
-  }, [reload]);
+  useVisibleInterval(() => void reload(), 5000);
   const finished = data.races.filter((item) =>
     item.match_cd === matchCd
     && item.sailfish_status === "99"
@@ -574,7 +579,7 @@ function HistoryWorkspace() {
       setNotice(codes.length === 1 ? "เพิ่มรอบเข้าคิวนำเข้าแล้ว" : `เพิ่มเข้าคิว ${body.accepted?.length || 0} รอบ · ข้าม ${body.skipped?.length || 0} รอบ`);
       setSelected(new Set());
       await reload();
-    } catch (error) { setNotice(`นำเข้าไม่สำเร็จ — ${String(error)}`); }
+    } catch (error) { setNotice(`นำเข้าไม่สำเร็จ — ${mapErrorMessage(error)}`); }
     finally { setBusy(false); }
   }
 
@@ -585,7 +590,7 @@ function HistoryWorkspace() {
       setNotice(`โหลดรายการแข่งขันจาก SailFish แล้ว ${body.total ?? body.items?.length ?? 0} รายการ`);
       await reload();
     } catch (error) {
-      setNotice(`โหลดรายการแข่งขันไม่สำเร็จ — ${String(error)}`);
+      setNotice(`โหลดรายการแข่งขันไม่สำเร็จ — ${mapErrorMessage(error)}`);
     } finally {
       setBusy(false);
     }
@@ -604,7 +609,7 @@ function HistoryWorkspace() {
       setNotice(`โหลดประเภทและรอบแล้ว ${body.items?.length || 0} รอบ · จบแล้ว ${body.finished?.length || 0} รอบ`);
       await reload();
     } catch (error) {
-      setNotice(`โหลดประเภทและรอบไม่สำเร็จ — ${String(error)}`);
+      setNotice(`โหลดประเภทและรอบไม่สำเร็จ — ${mapErrorMessage(error)}`);
     } finally {
       setBusy(false);
     }
@@ -633,11 +638,13 @@ function HistoryWorkspace() {
         : `ปิดผลย้อนหลัง ${scopeLabel} จากหน้าสาธารณะแล้ว`);
       await reload();
     } catch (error) {
-      setNotice(`ตั้งค่าหน้าสาธารณะไม่สำเร็จ — ${String(error)}`);
+      setNotice(`ตั้งค่าหน้าสาธารณะไม่สำเร็จ — ${mapErrorMessage(error)}`);
     } finally {
       setBusy(false);
     }
   }
+
+  if (loading) return <LoadingState/>;
 
   return <div className="history-workspace">
     <section className="panel match-toolbar">
@@ -687,7 +694,7 @@ function HistoryWorkspace() {
         const selectable = data.role === "admin" && !["running", "pending"].includes(job?.status || "") && !ready;
         const label = ready ? "พร้อมดูย้อนหลัง" : job?.status === "running" ? `กำลังนำเข้า ${number(job.progress_percent, 0)}%` : job?.status === "pending" ? "รอดำเนินการ" : job?.status === "error" ? "นำเข้าไม่สำเร็จ" : "ยังไม่ได้นำเข้า";
         return <div className="history-import-row" key={race.race_cd}>
-          <label>{selectable && <input type="checkbox" checked={selected.has(race.race_cd)} onChange={(event) => setSelected((current) => {const next = new Set(current); event.target.checked ? next.add(race.race_cd) : next.delete(race.race_cd); return next;})}/>}<span><b>{classNameOf(race)} · {race.rounds || "ไม่ระบุรอบ"}</b><small>{bangkokTime(race.end_at)}</small></span></label>
+          <label>{selectable && <input type="checkbox" checked={selected.has(race.race_cd)} onChange={(event) => setSelected((current) => {const next = new Set(current); event.target.checked ? next.add(race.race_cd) : next.delete(race.race_cd); return next;})}/>}<span><b>{classNameOf(race)} · {race.rounds || "ไม่ระบุรอบ"}</b><small>{bangkokDateTime(race.end_at)}</small></span></label>
           <i className={`import-status ${job?.status || (ready ? "completed" : "idle")}`}>{label}</i>
           <div>{ready ? <button onClick={() => setViewRaceCd(race.race_cd)}>เปิดดูย้อนหลัง</button> : data.role === "admin" && <button disabled={busy || job?.status === "running"} onClick={() => importRaces([race.race_cd])}>{job?.status === "error" ? "ลองนำเข้าใหม่" : "นำเข้ารอบนี้"}</button>}</div>
         </div>;
@@ -704,35 +711,40 @@ function PublishingWorkspace() {
   const [data, setData] = useState<WorkspaceData>({matches: [], races: [], collectors: [], imports: [], role: "viewer"});
   const [matchCd, setMatchCd] = useState("");
   const [notice, setNotice] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
   const reload = useCallback(async () => {
     const next = await loadWorkspaceData();
     setData(next);
     setMatchCd((current) => next.matches.some((item) => item.match_cd === current) ? current : next.matches[0]?.match_cd || "");
+    setLoading(false);
   }, []);
   useEffect(() => { void reload(); }, [reload]);
-  useEffect(() => {
-    const timer = window.setInterval(() => void reload(), 10000);
-    return () => window.clearInterval(timer);
-  }, [reload]);
+  useVisibleInterval(() => void reload(), 10000);
   const match = data.matches.find((item) => item.match_cd === matchCd);
   const races = data.races.filter((item) => item.match_cd === matchCd);
   const imports = new Map(data.imports.map((item) => [item.race_cd, item]));
   const groups = [...new Map(races.map((item) => [item.level_cd || "", classNameOf(item)])).entries()];
+  const isAdmin = data.role === "admin";
   async function toggle() {
     if (!match) return;
+    setBusy(true);
     try {
       await adminRequest(`/matches/${match.match_cd}/visibility`, {method: "POST", body: JSON.stringify({is_public: !match.is_public})});
       setNotice(!match.is_public ? "เปิดเผยรายการและทุกประเภทเรือแล้ว" : "ปิดเผยแพร่รายการแล้ว");
       await reload();
-    } catch (error) { setNotice(`บันทึกไม่สำเร็จ — ${String(error)}`); }
+    } catch (error) { setNotice(`บันทึกไม่สำเร็จ — ${mapErrorMessage(error)}`); }
+    finally { setBusy(false); }
   }
+  if (loading) return <LoadingState/>;
   return <div className="publishing-workspace">
+    {!isAdmin && <div className="role-notice"><ShieldCheck/> เฉพาะผู้ดูแลระบบ (admin) เท่านั้นที่เปลี่ยนสิทธิ์เผยแพร่ได้ — บัญชีนี้ดูสถานะได้อย่างเดียว</div>}
     <section className="panel match-toolbar">
       <div className="match-picker-row"><label>รายการแข่งขัน<select value={matchCd} onChange={(event) => setMatchCd(event.target.value)}>{data.matches.map((item) => <option value={item.match_cd} key={item.match_cd}>{item.name}</option>)}</select></label></div>
     </section>
     {match && <section className="panel publishing-master">
       <div><ShieldCheck/><span><b>{match.name}</b><small>เมื่อเปิด ทุกประเภทเรือในรายการนี้จะเผยแพร่โดยอัตโนมัติ</small></span></div>
-      <button className={match.is_public ? "enabled" : ""} disabled={data.role !== "admin"} onClick={toggle}>{match.is_public ? "กำลังเผยแพร่ · กดเพื่อปิด" : "เปิดเผยรายการนี้"}</button>
+      {isAdmin && <button className={match.is_public ? "enabled" : ""} disabled={busy} onClick={toggle}>{match.is_public ? "กำลังเผยแพร่ · กดเพื่อปิด" : "เปิดเผยรายการนี้"}</button>}
     </section>}
     {notice && <div className="control-notice">{notice}</div>}
     {groups.map(([levelCd, label]) => <section className="panel class-race-group" key={levelCd}>
@@ -743,118 +755,6 @@ function PublishingWorkspace() {
       })}
     </section>)}
   </div>;
-}
-
-function CollectorSetup({races, onSynced}: {races: Race[]; onSynced: () => void}) {
-  const [matches, setMatches] = useState<SailFishMatch[]>([]);
-  const [matchCd, setMatchCd] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState(
-    "เริ่มจากค้นหารายการแข่งขันในบัญชี SailFish"
-  );
-
-  async function request(path: string, init?: RequestInit) {
-    const api = process.env.NEXT_PUBLIC_CONTROL_API_URL;
-    if (!api) throw new Error("ยังไม่ได้ตั้งค่าที่อยู่ระบบควบคุม");
-    const supabase = createClient();
-    const {data: {session}} = await supabase.auth.getSession();
-    if (!session) throw new Error("การเข้าสู่ระบบหมดอายุ กรุณาเข้าสู่ระบบใหม่");
-    const response = await fetch(`${api.replace(/\/$/, "")}${path}`, {
-      ...init,
-      headers: {
-        Authorization: `Bearer ${session.access_token}`,
-        "Content-Type": "application/json",
-        ...(init?.headers || {}),
-      },
-    });
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
-      throw new Error(body.detail || `HTTP ${response.status}`);
-    }
-    return response.json();
-  }
-
-  async function discover() {
-    setBusy(true);
-    setMessage("กำลังเชื่อม ai-brain ผ่าน Tailscale และค้นหารายการ…");
-    try {
-      const body = await request("/races/discover");
-      const items = (body.items || []) as SailFishMatch[];
-      setMatches(items);
-      setMatchCd(items[0]?.matchCd || "");
-      setMessage(items.length
-        ? `พบ ${items.length} รายการ เลือกรายการแล้วกดเชื่อมรอบที่กำลังแข่ง`
-        : "ไม่พบรายการแข่งขันในบัญชี SailFish");
-    } catch (error) {
-      setMessage(`ค้นหาไม่สำเร็จ — ${String(error)}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function sync() {
-    if (!matchCd) return;
-    setBusy(true);
-    setMessage("กำลังตรวจรอบที่เจ้าของสนามกดเริ่ม และเปิดระบบเก็บข้อมูล…");
-    try {
-      const body = await request("/races/sync", {
-        method: "POST",
-        body: JSON.stringify({match_cd: matchCd}),
-      });
-      const count = Array.isArray(body.items) ? body.items.length : 0;
-      if (!count) {
-        setMessage("รายการนี้ยังไม่มีรอบการแข่งขันให้ติดตาม");
-        return;
-      }
-      setMessage(`พบทั้งหมด ${count} รอบ · รอเริ่ม ${body.waiting?.length || 0} · กำลังแข่ง ${body.active?.length || 0} · จบแล้ว ${body.finished?.length || 0}`);
-      onSynced();
-    } catch (error) {
-      setMessage(`เชื่อมข้อมูลไม่สำเร็จ — ${String(error)}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="control-layout setup-layout">
-      <section className="panel control-main">
-        <div className="control-lock">
-          <LockKeyhole/>
-          <div><b>ตั้งค่าผ่านเครือข่ายส่วนตัว TAILSCALE</b><span>คำสั่งส่งจากเครื่องนี้ไปยัง ai-brain โดยตรง</span></div>
-        </div>
-        <h2>เชื่อมรายการจาก SailFish</h2>
-        <p className="setup-copy">โหลดประเภทเรือและทุกรอบมาเตรียมไว้ก่อนได้ ระบบจะเริ่มเก็บข้อมูลเองเมื่อเจ้าของสนามกดเริ่มใน SailFish</p>
-        <div className="setup-actions">
-          <button className="arm" disabled={busy} onClick={discover}>
-            <Database/> {busy ? "กำลังทำงาน…" : "ค้นหารายการแข่งขัน"}
-          </button>
-          {matches.length > 0 && (
-            <>
-              <label htmlFor="match-picker">รายการแข่งขัน</label>
-              <select id="match-picker" value={matchCd} onChange={(event) => setMatchCd(event.target.value)}>
-                {matches.map((item) => (
-                  <option value={item.matchCd} key={item.matchCd}>
-                    {item.matchName || item.matchCd}
-                  </option>
-                ))}
-              </select>
-              <button className="status-refresh" disabled={busy || !matchCd} onClick={sync}>
-                <RefreshCw/> ตรวจสถานะรอบ
-              </button>
-            </>
-          )}
-        </div>
-        <div className="control-notice">{message}</div>
-        {races.length > 0 && <div className="synced-race-list">
-          <div className="synced-race-head"><b>รอบที่เชื่อมไว้แล้ว</b><span>{races.length} รอบ</span></div>
-          {races.map((item) => <div className="synced-race-row" key={item.race_cd}>
-            <span><b>{item.race_class?.name || item.name || "ไม่ระบุประเภท"}</b><small>{item.rounds || "ไม่ระบุรอบ"}</small></span>
-            <i className={`race-status status-${item.sailfish_status}`}>{raceStatusLabel[item.sailfish_status || ""] || "ไม่ทราบสถานะ"}</i>
-          </div>)}
-        </div>}
-      </section>
-    </div>
-  );
 }
 
 function Overview({race, collector, wind, athletes, liveCount, teamMap}: {
@@ -883,13 +783,14 @@ function Overview({race, collector, wind, athletes, liveCount, teamMap}: {
         <section className="panel athlete-snapshot">
           <PanelTitle icon={<Gauge/>} title="ข้อมูลนักกีฬาล่าสุด" meta={<span>{athletes.length} ลำ</span>}/>
           <AthleteTable athletes={athletes.slice(0, 7)} teamMap={teamMap}/>
+          {athletes.length > 7 && <Link className="view-all-link" href="/live">ดูนักกีฬาทั้งหมด {athletes.length} คน <ArrowRight size={14}/></Link>}
         </section>
         <section className="panel health-panel">
           <PanelTitle icon={<ShieldCheck/>} title="สถานะระบบเก็บข้อมูล" meta={null}/>
           <div className="health-list">
             <HealthRow label="การควบคุมผ่าน Tailscale" ok={true} value="ส่วนตัว"/>
             <HealthRow label="ช่องรับข้อมูลสด" ok={Boolean(collector?.websocket_connected)} value={collector?.websocket_connected ? "เชื่อมต่อแล้ว" : "ไม่ได้เชื่อมต่อ"}/>
-            <HealthRow label="ข้อมูลล่าสุด" ok={freshness(collector?.last_message_at).className === "live"} value={bangkokTime(collector?.last_message_at)}/>
+            <HealthRow label="ข้อมูลล่าสุด" ok={freshness(collector?.last_message_at).className === "live"} value={bangkokDateTime(collector?.last_message_at)}/>
             <HealthRow label="การแปลข้อมูล" ok={!collector?.last_error} value={collector?.last_error ? "ต้องตรวจสอบ" : "พร้อมใช้งาน"}/>
           </div>
         </section>
@@ -904,27 +805,22 @@ function LiveRace({race, collector, wind, athletes, teamMap}: {
   const [windWindow, setWindWindow] = useState<WindWindow>("realtime");
   const [windRows, setWindRows] = useState<WindState[]>([]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
-      const supabase = createClient();
-      let query = supabase.from("wind_readings")
-        .select("race_cd,wind_instrument_cd,captured_at_ms,speed_knots,direction_degree,latitude,longitude,created_at")
-        .eq("race_cd", race.race_cd)
-        .gte("captured_at_ms", Date.now() - windWindowMs(windWindow))
-        .order("captured_at_ms", {ascending: false})
-        .limit(1200);
-      if (race.main_wind_instrument_cd) query = query.eq("wind_instrument_cd", race.main_wind_instrument_cd);
-      const {data} = await query;
-      if (cancelled) return;
-      const rows = ((data || []) as Array<Omit<WindState, "updated_at"> & {created_at: string}>)
-        .map(({created_at, ...row}) => ({...row, updated_at: created_at}));
-      setWindRows(rows.length ? rows : wind ? [wind] : []);
-    };
-    void load();
-    const timer = window.setInterval(() => void load(), 2000);
-    return () => { cancelled = true; window.clearInterval(timer); };
+  const loadWind = useCallback(async () => {
+    const supabase = createClient();
+    let query = supabase.from("wind_readings")
+      .select("race_cd,wind_instrument_cd,captured_at_ms,speed_knots,direction_degree,latitude,longitude,created_at")
+      .eq("race_cd", race.race_cd)
+      .gte("captured_at_ms", Date.now() - windWindowMs(windWindow))
+      .order("captured_at_ms", {ascending: false})
+      .limit(1200);
+    if (race.main_wind_instrument_cd) query = query.eq("wind_instrument_cd", race.main_wind_instrument_cd);
+    const {data} = await query;
+    const rows = ((data || []) as Array<Omit<WindState, "updated_at"> & {created_at: string}>)
+      .map(({created_at, ...row}) => ({...row, updated_at: created_at}));
+    setWindRows(rows.length ? rows : wind ? [wind] : []);
   }, [race.main_wind_instrument_cd, race.race_cd, wind, windWindow]);
+  useEffect(() => { void loadWind(); }, [loadWind]);
+  useVisibleInterval(() => void loadWind(), 2000);
 
   return (
     <div className="live-layout">
@@ -956,7 +852,9 @@ function PreparedLiveRace({race, collector}: {race: Race; collector: Collector |
       </div>
       <p className="waiting-copy">เมื่อ SailFish เปลี่ยนเป็น “กำลังแข่งขัน” หน้านี้จะเปิดแผนที่ ลม และข้อมูลนักกีฬาให้อัตโนมัติ</p>
       {!websocketReady && <div className="control-notice">
-        ช่องรับข้อมูลสดยังไม่เชื่อมต่อ กรุณาตั้งค่า SAILFISH_LIVE_TOKEN ก่อนเริ่มการแข่งขัน
+        ช่องรับข้อมูลสดยังไม่เชื่อมต่อ
+        {collector?.token_source === "unavailable" && " — ระบบหา Live token อัตโนมัติไม่สำเร็จและไม่มีค่า fallback"}
+        {collector?.websocket_last_error && ` — ${collector.websocket_last_error}`}
       </div>}
     </section>
     <section className="panel control-status">
@@ -965,9 +863,11 @@ function PreparedLiveRace({race, collector}: {race: Race; collector: Collector |
         <div><dt>สถานะ SailFish</dt><dd>{raceStatusLabel[race.sailfish_status || ""] || "ไม่ทราบสถานะ"}</dd></div>
         <div><dt>สถานะ Collector</dt><dd>{collectorState[collector?.state || "idle"]}</dd></div>
         <div><dt>ช่องรับข้อมูลสด</dt><dd>{websocketReady ? "เชื่อมต่อแล้ว" : "ยังไม่เชื่อมต่อ"}</dd></div>
+        <div><dt>ที่มาของ Live token</dt><dd>{tokenSourceLabel[collector?.token_source || ""] || "ไม่ทราบ"}</dd></div>
+        <div><dt>ช่องทางข้อมูล</dt><dd>{collector?.transport_mode === "snapshot_fallback" ? "Snapshot สำรอง (WebSocket มีปัญหา)" : "WebSocket"}</dd></div>
         <div><dt>จำนวนการเชื่อมต่อใหม่</dt><dd>{collector?.reconnects || 0}</dd></div>
         <div><dt>ข้อความที่ได้รับ</dt><dd>{collector?.messages_received || 0}</dd></div>
-        <div><dt>ข้อความล่าสุด</dt><dd>{bangkokTime(collector?.last_message_at)}</dd></div>
+        <div><dt>ข้อความล่าสุด</dt><dd>{bangkokDateTime(collector?.last_message_at)}</dd></div>
       </dl>
     </section>
   </div>;
@@ -1033,10 +933,10 @@ function History({race, teams, role}: {race: Race; teams: Team[]; role: string})
         <PanelTitle icon={<Clock3/>} title={`${race.name || "การแข่งขัน"} · ${race.rounds || "ย้อนหลัง"}`} meta={role === "admin" ? <button className="text-button" onClick={exportCsv}>ดาวน์โหลดตารางข้อมูล</button> : <span>เวลาอ้างอิงสากล</span>}/>
         {current ? <RaceMap athletes={[current]} wind={null} teamMap={teamMap}/> : <div className="replay-placeholder"><Anchor/><h3>{selected ? `กำลังโหลด ${selected.team_name}` : "เลือกนักกีฬา"}</h3><p>เล่นข้อมูลทุกวินาที พร้อมทิศทางการเคลื่อนที่และความเร็วเข้าหาลม</p></div>}
         <div className="replay-controls">
-          <button onClick={() => setCursor(0)}><RotateCcw/></button>
-          <button className="play" onClick={() => setPlaying((value) => !value)}>{playing ? <Square/> : <Play/>}</button>
-          <input className="timeline-input" type="range" min="0" max={Math.max(0, readings.length - 1)} value={cursor} onChange={(event) => setCursor(Number(event.target.value))}/>
-          <select value={speed} onChange={(event) => setSpeed(Number(event.target.value))}><option value=".5">0.5×</option><option value="1">1×</option><option value="2">2×</option><option value="5">5×</option></select>
+          <button aria-label="กลับไปจุดเริ่มต้น" onClick={() => setCursor(0)}><RotateCcw/></button>
+          <button className="play" aria-label={playing ? "หยุดชั่วคราว" : "เล่นย้อนหลัง"} onClick={() => setPlaying((value) => !value)}>{playing ? <Square/> : <Play/>}</button>
+          <input className="timeline-input" aria-label="ตำแหน่งเวลาในการเล่นย้อนหลัง" type="range" min="0" max={Math.max(0, readings.length - 1)} value={cursor} onChange={(event) => setCursor(Number(event.target.value))}/>
+          <select aria-label="ความเร็วการเล่น" value={speed} onChange={(event) => setSpeed(Number(event.target.value))}><option value=".5">0.5×</option><option value="1">1×</option><option value="2">2×</option><option value="5">5×</option></select>
         </div>
       </section>
       <section className="panel history-roster">
@@ -1047,73 +947,72 @@ function History({race, teams, role}: {race: Race; teams: Team[]; role: string})
   );
 }
 
+const MAX_COMPARE = 4;
+
 function Compare({athletes, teamMap}: {athletes: AthleteState[]; teamMap: Map<string, Team>}) {
-  const selected = athletes.slice(0, 4);
+  const [selectedTeams, setSelectedTeams] = useState<string[]>([]);
+  useEffect(() => {
+    setSelectedTeams((current) => {
+      const valid = current.filter((teamCd) => athletes.some((athlete) => athlete.team_cd === teamCd));
+      return valid.length ? valid : athletes.slice(0, MAX_COMPARE).map((athlete) => athlete.team_cd);
+    });
+  }, [athletes]);
+
+  function toggle(teamCd: string) {
+    setSelectedTeams((current) => {
+      if (current.includes(teamCd)) return current.filter((item) => item !== teamCd);
+      if (current.length >= MAX_COMPARE) return current;
+      return [...current, teamCd];
+    });
+  }
+
+  const selected = athletes.filter((athlete) => selectedTeams.includes(athlete.team_cd));
+
   return (
-    <div className="compare-grid">
-      {selected.map((athlete, index) => {
-        const team = teamMap.get(athlete.team_cd);
-        return <section className="panel athlete-card" key={athlete.team_cd}>
-          <div className={`sail-accent accent-${index + 1}`}/>
-          <p>หมายเลขใบเรือ {team?.sail_no || "—"}</p><h2>{team?.team_name || athlete.team_cd}</h2>
-          <div className="comparison-metrics">
-            <Metric label="ความเร็วเหนือพื้นน้ำ (SOG)" value={number(athlete.sog_knots)} sub="นอต" icon={<Gauge/>}/>
-            <Metric label="ทิศทางการเคลื่อนที่ (COG)" value={`${number(athlete.cog_degree, 0)}°`} sub="องศา" icon={<Compass/>}/>
-            <Metric label="มุมเส้นทางเทียบลม" value={`${number(athlete.relative_angle_degree, 0)}°`} sub="องศา" icon={<Wind/>}/>
-            <Metric label="ความเร็วเข้าหาลม (VMG)" value={number(athlete.upwind_vmg_knots)} sub="นอต" icon={<ArrowRight/>}/>
-          </div>
-        </section>;
-      })}
-      {!selected.length && <EmptyState/>}
-    </div>
+    <>
+      <section className="panel compare-picker">
+        <PanelTitle icon={<Users/>} title="เลือกนักกีฬาที่จะเปรียบเทียบ" meta={<span>เลือกแล้ว {selectedTeams.length}/{MAX_COMPARE}</span>}/>
+        <div className="compare-picker-grid">
+          {athletes.map((athlete) => {
+            const team = teamMap.get(athlete.team_cd);
+            const checked = selectedTeams.includes(athlete.team_cd);
+            return <label className={`compare-picker-item ${checked ? "checked" : ""}`} key={athlete.team_cd}>
+              <input
+                type="checkbox"
+                checked={checked}
+                disabled={!checked && selectedTeams.length >= MAX_COMPARE}
+                onChange={() => toggle(athlete.team_cd)}
+              />
+              <b>{team?.sail_no || "—"}</b><span>{team?.team_name || athlete.team_cd.slice(0, 8)}</span>
+            </label>;
+          })}
+          {!athletes.length && <div className="table-empty">ยังไม่มีข้อมูลนักกีฬาให้เลือก</div>}
+        </div>
+      </section>
+      <div className="compare-grid">
+        {selected.map((athlete, index) => {
+          const team = teamMap.get(athlete.team_cd);
+          return <section className="panel athlete-card" key={athlete.team_cd}>
+            <div className={`sail-accent accent-${index + 1}`}/>
+            <p>หมายเลขใบเรือ {team?.sail_no || "—"}</p><h2>{team?.team_name || athlete.team_cd}</h2>
+            <div className="comparison-metrics">
+              <Metric label="ความเร็วเหนือพื้นน้ำ (SOG)" value={number(athlete.sog_knots)} sub="นอต" icon={<Gauge/>}/>
+              <Metric label="ทิศทางการเคลื่อนที่ (COG)" value={`${number(athlete.cog_degree, 0)}°`} sub="องศา" icon={<Compass/>}/>
+              <Metric label="มุมเส้นทางเทียบลม" value={`${number(athlete.relative_angle_degree, 0)}°`} sub="องศา" icon={<Wind/>}/>
+              <Metric label="ความเร็วเข้าหาลม (VMG)" value={number(athlete.upwind_vmg_knots)} sub="นอต" icon={<ArrowRight/>}/>
+            </div>
+          </section>;
+        })}
+        {!selected.length && <EmptyState/>}
+      </div>
+    </>
   );
 }
 
-function Control({collector, race, notice, historyImport, onControl, onImportHistory}: {
-  collector: Collector | null; race: Race; notice: string;
-  historyImport: HistoryImport | null;
-  onControl: (action: "arm" | "start-override" | "stop" | "retry") => void;
-  onImportHistory: () => void;
-}) {
-  return (
-    <div className="control-layout">
-      <section className="panel control-main">
-        <div className="control-lock"><LockKeyhole/><div><b>ควบคุมผ่านเครือข่ายส่วนตัว TAILSCALE</b><span>คำสั่งถูกส่งจากเครื่องนี้ไปยัง ai-brain โดยตรง</span></div></div>
-        <h2>{race.name} · {race.rounds}</h2>
-        <div className={`selected-race-status status-${race.sailfish_status}`}>
-          สถานะจาก SailFish: <b>{raceStatusLabel[race.sailfish_status || ""] || "ไม่ทราบสถานะ"}</b>
-        </div>
-        <div className="state-flow">{["idle", "armed", "waiting_for_start", "recording", "finishing", "completed"].map((state) => <span className={collector?.state === state ? "current" : ""} key={state}>{collectorState[state]}</span>)}</div>
-        <div className="control-buttons">
-          {race.sailfish_status === "50" && <>
-            <button className="arm" onClick={() => onControl("arm")}><Radio/> เตรียมเก็บข้อมูล</button>
-            <button onClick={() => onControl("start-override")}><Play/> เริ่มด้วยตนเอง</button>
-            <button onClick={() => onControl("retry")}><RefreshCw/> ลองใหม่</button>
-            <button className="danger" onClick={() => onControl("stop")}><Square/> หยุด</button>
-          </>}
-          {race.sailfish_status === "10" && <p className="waiting-copy">รอเจ้าของสนามกดเริ่มใน SailFish แล้วกด “ตรวจสถานะรอบ” ด้านบนอีกครั้ง</p>}
-          {race.sailfish_status === "99" && <button className="arm" onClick={onImportHistory} disabled={historyImport?.status === "running"}>
-            <Clock3/> {historyImport?.status === "running" ? "กำลังนำเข้าข้อมูลย้อนหลัง…" : "นำเข้าข้อมูลย้อนหลังตอนนี้"}
-          </button>}
-        </div>
-        {notice && <div className="control-notice">{notice}</div>}
-      </section>
-      <section className="panel control-status">
-        <PanelTitle icon={<Activity/>} title="สถานะการทำงาน" meta={null}/>
-        <dl>
-          <dt>ขั้นตอนปัจจุบัน</dt><dd>{collectorState[collector?.state || "idle"]}</dd>
-          <dt>ช่องรับข้อมูลสด</dt><dd>{collector?.websocket_connected ? "เชื่อมต่อแล้ว" : "ไม่ได้เชื่อมต่อ"}</dd>
-          <dt>ข้อมูลที่ได้รับ</dt><dd>{collector?.messages_received || 0}</dd>
-          <dt>จำนวนครั้งที่เชื่อมต่อใหม่</dt><dd>{collector?.reconnects || 0}</dd>
-          <dt>ข้อมูลล่าสุด</dt><dd>{bangkokTime(collector?.last_message_at)}</dd>
-          <dt>การนำเข้าข้อมูลย้อนหลัง</dt><dd>{historyImport ? collectorState[historyImport.status] || "เสร็จแล้ว" : "รอจบการแข่งขัน"}</dd>
-          <dt>เวลานำเข้าที่กำหนด</dt><dd>{historyImport ? bangkokTime(historyImport.scheduled_for) : "หลังจบ 90 นาที"}</dd>
-          <dt>ความคืบหน้า</dt><dd>{number(historyImport?.progress_percent, 0)}%</dd>
-        </dl>
-        {historyImport?.last_error && <div className="control-notice">{historyImport.last_error}</div>}
-      </section>
-    </div>
-  );
+function formatDetails(details: Record<string, unknown>) {
+  const entries = Object.entries(details || {});
+  if (!entries.length) return "ไม่มีรายละเอียดเพิ่มเติม";
+  return entries.map(([key, value]) => `${key}: ${typeof value === "object" ? JSON.stringify(value) : String(value)}`).join(" · ");
 }
 
 function Quality({collector, quality, athletes, teams}: {collector: Collector | null; quality: QualityEvent[]; athletes: AthleteState[]; teams: Team[]}) {
@@ -1129,60 +1028,9 @@ function Quality({collector, quality, athletes, teams}: {collector: Collector | 
       <section className="panel quality-events">
         <PanelTitle icon={<ClipboardCheck/>} title="รายการปัญหาคุณภาพข้อมูล" meta={<span>30 รายการล่าสุด</span>}/>
         {!quality.length && <div className="all-clear"><CheckCircle2/><b>ไม่พบปัญหาในรอบนี้</b><span>ปัญหาการแปลข้อมูล เวลา และการเชื่อมต่อจะแสดงที่นี่</span></div>}
-        {quality.map((item) => <div className="event-row" key={item.id}><span className={`severity ${item.severity}`}/><div><b>{qualityEventName[item.event_type] || "พบข้อมูลที่ต้องตรวจสอบ"}</b><small>รายละเอียดสำหรับผู้ดูแล: {JSON.stringify(item.details)}</small></div><time>{bangkokTime(item.created_at)}</time></div>)}
+        {quality.map((item) => <div className="event-row" key={item.id}><span className={`severity ${item.severity}`}/><div><b>{qualityEventName[item.event_type] || "พบข้อมูลที่ต้องตรวจสอบ"}</b><small>รายละเอียดสำหรับผู้ดูแล: {formatDetails(item.details)}</small></div><time>{bangkokDateTime(item.created_at)}</time></div>)}
       </section>
     </>
-  );
-}
-
-function SettingsPanel({race, wind, role}: {race: Race; wind: WindState | null; role: string}) {
-  const [classes, setClasses] = useState<RaceClass[]>([]);
-  const [message, setMessage] = useState("");
-
-  useEffect(() => {
-    const supabase = createClient();
-    void supabase.from("race_classes").select("*").eq("match_cd", race.match_cd).order("name")
-      .then(({data}) => setClasses((data || []) as RaceClass[]));
-  }, [race.match_cd]);
-
-  async function saveVisibility(item: RaceClass, field: "public_live_enabled" | "public_history_enabled") {
-    if (role !== "admin") return;
-    const api = process.env.NEXT_PUBLIC_CONTROL_API_URL;
-    const supabase = createClient();
-    const {data: {session}} = await supabase.auth.getSession();
-    if (!api || !session) return setMessage("ต้องเข้าสู่ระบบและเชื่อม Tailscale ก่อนแก้สิทธิ์");
-    const next = {...item, [field]: !item[field]};
-    try {
-      const response = await fetch(`${api.replace(/\/$/, "")}/race-classes/${item.level_cd}/visibility`, {
-        method: "POST",
-        headers: {Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json"},
-        body: JSON.stringify({
-          public_live_enabled: next.public_live_enabled,
-          public_history_enabled: next.public_history_enabled,
-        }),
-      });
-      if (!response.ok) throw new Error((await response.json()).detail || `HTTP ${response.status}`);
-      setClasses((values) => values.map((value) => value.level_cd === item.level_cd ? next : value));
-      setMessage(`บันทึกสิทธิ์การเผยแพร่ของ ${item.name} แล้ว`);
-    } catch (error) {
-      setMessage(`บันทึกไม่ได้ — เช็ก Tailscale (${String(error)})`);
-    }
-  }
-
-  return (
-    <div className="settings-grid">
-      <section className="panel setting-card"><Settings2/><h3>ทุ่นลมอ้างอิง</h3><p>ใช้เครื่องวัดลมหลัก</p><code>{race.main_wind_instrument_cd || wind?.wind_instrument_cd || "ยังไม่ได้กำหนด"}</code><button disabled>กำหนดจากการตั้งค่าระบบ</button></section>
-      <section className="panel setting-card"><Clock3/><h3>เวลาและความสดของข้อมูล</h3><p>แสดงเวลาไทย</p><code>ยอมรับข้อมูลลมที่ห่างไม่เกิน 5 วินาที</code><button disabled>จัดเก็บเวลาแบบสากล</button></section>
-      <section className="panel setting-card"><Database/><h3>ระยะเวลาเก็บข้อมูล</h3><p>ข้อมูลที่แปลแล้วเก็บระยะยาว</p><code>ข้อมูลดิบเก็บ 30 วัน</code><button disabled>ลบอัตโนมัติตามกำหนด</button></section>
-      <section className="panel setting-card public-settings"><ShieldCheck/><h3>สิทธิ์การเผยแพร่</h3><p>อนุญาตแยกการแข่งขันสดและข้อมูลย้อนหลังรายประเภทเรือ</p>
-        {classes.map((item) => <div className="class-visibility" key={item.level_cd}>
-          <b>{item.name}</b>
-          <button disabled={role !== "admin"} className={item.public_live_enabled ? "enabled" : ""} onClick={() => saveVisibility(item, "public_live_enabled")}>สด: {item.public_live_enabled ? "เผยแพร่" : "ไม่เผยแพร่"}</button>
-          <button disabled={role !== "admin"} className={item.public_history_enabled ? "enabled" : ""} onClick={() => saveVisibility(item, "public_history_enabled")}>ย้อนหลัง: {item.public_history_enabled ? "เผยแพร่" : "ไม่เผยแพร่"}</button>
-        </div>)}
-        {message && <div className="control-notice">{message}</div>}
-      </section>
-    </div>
   );
 }
 

@@ -92,4 +92,10 @@ export interface Collector {
   last_error: string | null;
   messages_received: number;
   reconnects: number;
+  token_source: "automatic" | "environment" | "unavailable" | null;
+  token_expires_at: string | null;
+  websocket_last_error: string | null;
+  websocket_last_error_at: string | null;
+  transport_mode: "websocket" | "snapshot_fallback";
+  last_status_poll_error: string | null;
 }
