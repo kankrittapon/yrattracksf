@@ -48,22 +48,7 @@ interface PublicRaceData {
   };
   tracker_status: {
     track_open: boolean;
-    total_gps: number;
-    online_gps: number;
-    stale_gps: number;
-    offline_gps: number;
-    last_signal_at_ms: number | null;
-    checked_at: string;
   } | null;
-  trackers: Array<{
-    team_cd: string;
-    team_name: string | null;
-    sail_no: string | null;
-    tracker_no?: string | null;
-    captured_at_ms: number | null;
-    signal_status: "online" | "stale" | "offline";
-    checked_at: string;
-  }>;
   wind: {
     captured_at_ms: number;
     speed_knots: number | null;
@@ -143,21 +128,12 @@ export default function PublicTelemetryPage() {
   const loadRace = useCallback(async () => {
     if (!raceCd) return setData(null);
     const supabase = createClient();
-    const [{data: result, error}, {data: trackerNumbers}, {data: raceWind}] = await Promise.all([
+    const [{data: result, error}, {data: raceWind}] = await Promise.all([
       supabase.rpc("get_public_race", {p_race_cd: raceCd}),
-      supabase.rpc("get_public_tracker_numbers", {p_race_cd: raceCd}),
       supabase.rpc("get_public_race_wind", {p_race_cd: raceCd}),
     ]);
     if (error) return setMessage(error.message);
     const next = (result || null) as PublicRaceData | null;
-    const numberByTeam = new Map(
-      ((trackerNumbers || []) as Array<{team_cd: string; tracker_no: string | null}>)
-        .map((item) => [item.team_cd, item.tracker_no]),
-    );
-    if (next) next.trackers = next.trackers.map((tracker) => ({
-      ...tracker,
-      tracker_no: numberByTeam.get(tracker.team_cd) || null,
-    }));
     if (next && raceWind?.[0]) next.wind = raceWind[0] as PublicRaceData["wind"];
     setData(next);
     setMessage(result ? "" : "รอบนี้ไม่ได้รับอนุญาตให้แสดง");
@@ -244,16 +220,8 @@ export default function PublicTelemetryPage() {
         {mode === "live" && data.race.status !== "99" && <section className={`public-track-card ${data.tracker_status?.track_open ? "open" : ""}`}>
           <div className="public-track-summary">
             <span><Satellite/></span>
-            <div><small>สถานะระบบติดตาม</small><h3>{data.tracker_status?.track_open ? "Track เปิดแล้ว" : "กำลังรอสัญญาณ GPS"}</h3><p>ตรวจล่าสุด {bangkokTime(data.tracker_status?.checked_at)}</p></div>
-            <div className="public-gps-count"><b>{data.tracker_status?.online_gps || 0}/{data.tracker_status?.total_gps || data.trackers.length}</b><small>GPS ออนไลน์</small></div>
+            <div><small>สถานะระบบติดตาม</small><h3>{data.tracker_status?.track_open ? "ระบบติดตามเปิดแล้ว" : "กำลังเตรียมระบบติดตาม"}</h3></div>
           </div>
-          {data.trackers.length > 0 && <div className="public-tracker-list">
-            {data.trackers.map((tracker) => <div key={tracker.team_cd}>
-              <i className={tracker.signal_status}/>
-              <span><b>{tracker.sail_no || "—"}</b><small>{tracker.team_name || tracker.team_cd} · Track {tracker.tracker_no || "—"}</small></span>
-              <em>{tracker.signal_status === "online" ? "ออนไลน์" : tracker.signal_status === "stale" ? "สัญญาณช้า" : "รอสัญญาณ"}</em>
-            </div>)}
-          </div>}
         </section>}
         {(mode === "history" || data.race.status === "50") && <section className="public-metrics">
           <Metric icon={<Wind/>} label="ความเร็วลม" value={`${number(data.wind?.speed_knots)} นอต`} sub={bangkokTime(data.wind?.captured_at_ms)}/>
