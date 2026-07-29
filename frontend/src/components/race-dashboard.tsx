@@ -331,6 +331,18 @@ function readableMatchName(matchCd: string, name: string | null | undefined, rac
   return classes.length ? `รายการเดิม · ${classes.slice(0, 3).join(" / ")}` : "รายการเดิมที่ยังไม่มีชื่อ";
 }
 
+function historyMatchName(match: Match, races: Race[]) {
+  const readable = readableMatchName(match.match_cd, match.name, races);
+  if (!readable.startsWith("รายการเดิม")) return readable;
+  const matchRaces = races.filter((race) => race.match_cd === match.match_cd);
+  const classCount = new Set(matchRaces.map((race) => race.level_cd).filter(Boolean)).size;
+  const firstStart = matchRaces.map((race) => race.start_at).filter(Boolean).sort()[0];
+  const date = firstStart ? new Intl.DateTimeFormat("th-TH", {
+    day: "numeric", month: "short", year: "2-digit", timeZone: "Asia/Bangkok",
+  }).format(new Date(firstStart)) : "";
+  return `รายการย้อนหลัง · ${classCount} ประเภท${date ? ` · ${date}` : ""}`;
+}
+
 function MatchControlWorkspace() {
   const [data, setData] = useState<WorkspaceData>({matches: [], races: [], collectors: [], imports: [], role: "viewer"});
   const [discovered, setDiscovered] = useState<SailFishMatch[]>([]);
@@ -530,16 +542,14 @@ function HistoryWorkspace() {
     .map((item) => item.match_cd));
   const matchOptions = data.matches.filter((item) => finishedMatchIds.has(item.match_cd));
   const classes = [...new Map(finished.map((item) => [item.level_cd || "", classNameOf(item)])).entries()];
-  const visible = finished.filter((item) => !classFilter || item.level_cd === classFilter);
+  const visible = classFilter ? finished.filter((item) => item.level_cd === classFilter) : [];
   const importMap = new Map(data.imports.map((item) => [item.race_cd, item]));
   const importable = visible.filter((race) => {
     const job = importMap.get(race.race_cd);
     return !race.history_imported_at && job?.status !== "completed"
       && job?.status !== "running" && job?.status !== "pending";
   });
-  const scopeLabel = classFilter
-    ? classes.find(([value]) => value === classFilter)?.[1] || "ประเภทที่เลือก"
-    : "ทุกประเภท";
+  const scopeLabel = classes.find(([value]) => value === classFilter)?.[1] || "ประเภทที่เลือก";
   const viewRace = data.races.find((item) => item.race_cd === viewRaceCd);
   useEffect(() => {
     if (!viewRaceCd) return setTeams([]);
@@ -566,15 +576,26 @@ function HistoryWorkspace() {
       <div className="match-picker-row">
         <label>รายการแข่งขัน<select value={matchCd} onChange={(event) => {setMatchCd(event.target.value); setClassFilter(""); setSelected(new Set());}}>
           {!matchOptions.length && <option value="">ยังไม่มีรายการที่จบการแข่งขัน</option>}
-          {matchOptions.map((item) => <option value={item.match_cd} key={item.match_cd}>{readableMatchName(item.match_cd, item.name, data.races)}</option>)}
+          {matchOptions.map((item) => <option value={item.match_cd} key={item.match_cd}>{historyMatchName(item, data.races)}</option>)}
         </select></label>
       </div>
-      <div className="class-filter">
-        <button className={!classFilter ? "active" : ""} onClick={() => {setClassFilter(""); setSelected(new Set());}}>ทุกประเภท ({finished.length})</button>
-        {classes.map(([value, label]) => <button className={classFilter === value ? "active" : ""} key={value} onClick={() => {setClassFilter(value); setSelected(new Set());}}>{label} ({finished.filter((item) => item.level_cd === value).length})</button>)}
-      </div>
     </section>
-    <section className="panel history-import-list">
+    {!classFilter && classes.length > 0 && <section className="panel history-class-picker">
+      <PanelTitle icon={<LayersIcon/>} title="เลือกประเภทเรือก่อน" meta={<span>{classes.length} ประเภทที่มีรอบจบแล้ว</span>}/>
+      <div className="history-class-grid">
+        {classes.map(([value, label]) => {
+          const classRaces = finished.filter((item) => item.level_cd === value);
+          const ready = classRaces.filter((race) => race.history_imported_at || importMap.get(race.race_cd)?.status === "completed").length;
+          return <button key={value} onClick={() => {setClassFilter(value); setSelected(new Set());}}>
+            <span><Users/><b>{label}</b></span>
+            <small>{classRaces.length} รอบจบแล้ว · พร้อมดู {ready} รอบ</small>
+            <i>เลือกประเภทนี้ →</i>
+          </button>;
+        })}
+      </div>
+    </section>}
+    {classFilter && <section className="panel history-import-list">
+      <button className="history-back-to-classes" onClick={() => {setClassFilter(""); setSelected(new Set());}}>← เลือกประเภทเรืออื่น</button>
       <PanelTitle icon={<Clock3/>} title={`รอบที่จบแล้ว · ${scopeLabel}`} meta={data.role === "admin" ? <div className="history-batch-actions">
         <button className="text-button" disabled={busy || !importable.length} onClick={() => setSelected(new Set(importable.map((race) => race.race_cd)))}>
           เลือกทั้งหมด ({importable.length})
@@ -598,7 +619,8 @@ function HistoryWorkspace() {
         ? <div className="table-empty">ยังไม่มีรายการที่เริ่มและจบการแข่งขัน จึงยังไม่มีข้อมูลให้นำเข้า</div>
         : !visible.length && <div className="table-empty">ยังไม่มีรอบที่จบในรายการหรือประเภทนี้</div>}
       {notice && <div className="control-notice">{notice}</div>}
-    </section>
+    </section>}
+    {!matchOptions.length && <section className="panel"><div className="table-empty">ยังไม่มีรายการที่เริ่มและจบการแข่งขัน จึงยังไม่มีข้อมูลให้นำเข้า</div></section>}
     {viewRace && <History race={viewRace} teams={teams} role={data.role}/>}
   </div>;
 }
