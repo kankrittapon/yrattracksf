@@ -5,6 +5,7 @@ import {Activity, Anchor, Clock3, Compass, Gauge, Radio, Satellite, Wind} from "
 import {createClient} from "@/lib/supabase/client";
 import {bangkokTime, directionName, freshness, mapErrorMessage, number} from "@/lib/format";
 import {useVisibleInterval} from "@/lib/use-visible-interval";
+import {useDebouncedCallback} from "@/lib/use-debounced-callback";
 
 interface CatalogRace {
   match_cd: string;
@@ -127,6 +128,8 @@ export default function PublicTelemetryPage() {
     if (validRace !== raceCd) setRaceCd(validRace);
   }, [raceCd, races]);
 
+  const [publicChannelHealthy, setPublicChannelHealthy] = useState(false);
+
   const loadRace = useCallback(async () => {
     if (!raceCd) return setData(null);
     const supabase = createClient();
@@ -143,9 +146,11 @@ export default function PublicTelemetryPage() {
   }, [raceCd]);
 
   useEffect(() => { void loadRace(); }, [loadRace]);
+  // Realtime เป็นตัวหลัก — poll ที่นี่เป็นแค่ fallback: ถี่ (1s) ตอน Realtime ยังไม่ต่อติด
+  // และห่างลง (5s) ตอน Realtime ทำงานอยู่แล้ว เผื่อ broadcast หลุดหายไปบ้าง
   useVisibleInterval(() => {
     if (mode === "live" && raceCd) void loadRace();
-  }, 1000);
+  }, publicChannelHealthy ? 5000 : 1000);
 
   const loadWind = useCallback(async () => {
     if (mode !== "live" || !raceCd) return setWindRows([]);
@@ -165,7 +170,7 @@ export default function PublicTelemetryPage() {
   useEffect(() => { void loadWind(); }, [loadWind]);
   useVisibleInterval(() => {
     if (mode === "live" && raceCd) void loadWind();
-  }, 1000);
+  }, publicChannelHealthy ? 5000 : 1000);
 
   useEffect(() => {
     const firstTeam = data?.athletes[0]?.team_cd || "";
@@ -191,7 +196,23 @@ export default function PublicTelemetryPage() {
   useEffect(() => { void loadAthleteSeries(); }, [loadAthleteSeries]);
   useVisibleInterval(() => {
     if (mode === "live" && data?.race.status === "50" && teamCd) void loadAthleteSeries();
-  }, 1000);
+  }, publicChannelHealthy ? 5000 : 1000);
+
+  // Realtime: collector เขียนแถวใหม่ลง DB → trigger ฝั่ง DB ส่ง broadcast แบบไม่มีพิกัด/ความเร็วดิบ
+  // มาที่ topic ของรอบนี้ (เฉพาะรอบที่เปิดสาธารณะอยู่) → หน้านี้แค่รู้ว่า "มีของใหม่" แล้วเรียก RPC
+  // ที่ mask ข้อมูลไว้แล้วซ้ำ ทำให้เห็นข้อมูลใหม่เกือบทันทีแทนที่จะรอรอบ poll ถัดไป
+  const debouncedAthleteRefresh = useDebouncedCallback(() => { void loadRace(); void loadAthleteSeries(); }, 300);
+  const debouncedWindRefresh = useDebouncedCallback(() => { void loadRace(); void loadWind(); }, 300);
+  useEffect(() => {
+    if (mode !== "live" || !raceCd) { setPublicChannelHealthy(false); return; }
+    setPublicChannelHealthy(false);
+    const supabase = createClient();
+    const channel = supabase.channel(`public:race:${raceCd}`)
+      .on("broadcast", {event: "athlete_update"}, () => debouncedAthleteRefresh())
+      .on("broadcast", {event: "wind_update"}, () => debouncedWindRefresh())
+      .subscribe((status) => setPublicChannelHealthy(status === "SUBSCRIBED"));
+    return () => { void supabase.removeChannel(channel); setPublicChannelHealthy(false); };
+  }, [mode, raceCd, debouncedAthleteRefresh, debouncedWindRefresh]);
 
   const selected = data?.athletes.find((item) => item.team_cd === teamCd) || data?.athletes[0];
   const hasLiveTelemetry = Boolean(data?.wind)
@@ -241,7 +262,7 @@ export default function PublicTelemetryPage() {
         {(mode === "history" || data.race.status === "50") && <section className="public-metrics">
           <Metric icon={<Wind/>} label="ความเร็วลม" value={`${number(data.wind?.speed_knots)} นอต`} sub={bangkokTime(data.wind?.captured_at_ms)}/>
           <Metric icon={<Compass/>} label="ทิศที่ลมพัดมา" value={`${number(data.wind?.direction_degree, 0)}°`} sub={directionName(data.wind?.direction_degree)}/>
-          <Metric icon={<Activity/>} label="สถานะข้อมูล" value={freshness(data.wind?.updated_at).label} sub={mode === "live" ? "อัปเดตทุก 1 วินาที" : "ข้อมูลสุดท้ายของรอบ"}/>
+          <Metric icon={<Activity/>} label="สถานะข้อมูล" value={freshness(data.wind?.updated_at).label} sub={mode === "live" ? "อัปเดตแบบเรียลไทม์" : "ข้อมูลสุดท้ายของรอบ"}/>
         </section>}
 
         {mode === "live" && data.race.status !== "50" ? <section className="public-waiting-card">
@@ -326,5 +347,5 @@ function HistoryChart({rows, live = false}: {rows: PublicAthlete[]; live?: boole
   const values = rows.map((row) => row.sog_knots || 0);
   const max = Math.max(...values, 1);
   const points = values.map((value, index) => `${index / Math.max(values.length - 1, 1) * 100},${94 - value / max * 82}`).join(" ");
-  return <div className="public-chart"><div><b>ความเร็วตามเวลา</b><span>{live ? "อัปเดตทุก 1 วินาที · " : ""}แสดงหนึ่งจุดทุก 5 วินาที</span></div><svg viewBox="0 0 100 100" preserveAspectRatio="none"><polyline points={points}/></svg></div>;
+  return <div className="public-chart"><div><b>ความเร็วตามเวลา</b><span>{live ? "อัปเดตแบบเรียลไทม์ · " : ""}แสดงหนึ่งจุดทุก 5 วินาที</span></div><svg viewBox="0 0 100 100" preserveAspectRatio="none"><polyline points={points}/></svg></div>;
 }
