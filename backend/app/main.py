@@ -41,6 +41,26 @@ def _timestamp_iso(value: Any) -> str | None:
     return datetime.fromtimestamp(numeric, UTC).isoformat()
 
 
+async def _persist_matches(repository: Repository, matches: list[dict[str, Any]]) -> None:
+    rows = []
+    now = datetime.now(UTC).isoformat()
+    for match in matches:
+        match_cd = str(match.get("matchCd") or "")
+        if not match_cd:
+            continue
+        rows.append({
+            "match_cd": match_cd,
+            "name": match.get("matchName") or match_cd,
+            "starts_at": _timestamp_iso(match.get("matchStart")),
+            "ends_at": _timestamp_iso(match.get("matchEnd")),
+            "country": match.get("country"),
+            "city": match.get("city"),
+            "synced_at": now,
+            "raw_metadata": {"source": "admin_discover"},
+        })
+    await repository.upsert("matches", rows, "match_cd")
+
+
 async def _persist_races(repository: Repository, races: list[dict[str, Any]]) -> None:
     if not races:
         return
@@ -48,18 +68,20 @@ async def _persist_races(repository: Repository, races: list[dict[str, Any]]) ->
     match_cd = str(first.get("matchCd") or "")
     if not match_cd:
         return
-    await repository.upsert(
-        "matches",
-        [{
-            "match_cd": match_cd,
-            "name": first.get("matchName") or match_cd,
-            "starts_at": _timestamp_iso(first.get("matchStart")),
-            "ends_at": _timestamp_iso(first.get("matchEnd")),
-            "synced_at": datetime.now(UTC).isoformat(),
-            "raw_metadata": {"source": "admin_sync"},
-        }],
-        "match_cd",
+    existing = await repository.select(
+        "matches", columns="match_cd", filters={"match_cd": f"eq.{match_cd}"}, limit=1
     )
+    if existing:
+        await repository.update(
+            "matches", {"synced_at": datetime.now(UTC).isoformat()}, {"match_cd": match_cd}
+        )
+    else:
+        await _persist_matches(repository, [{
+            "matchCd": match_cd,
+            "matchName": first.get("matchName") or match_cd,
+            "matchStart": first.get("matchStart"),
+            "matchEnd": first.get("matchEnd"),
+        }])
     classes: dict[str, dict[str, Any]] = {}
     normalized_races: list[dict[str, Any]] = []
     for race in races:
@@ -132,7 +154,12 @@ async def health() -> dict[str, str]:
 
 @app.get("/races/discover", dependencies=[Depends(control_rate_limit)])
 async def discover_races(principal: Principal = Depends(require_admin)):
-    return {"items": await app.state.sailfish.discover_races()}
+    matches = await app.state.sailfish.discover_races()
+    await _persist_matches(app.state.repository, matches)
+    await app.state.repository.audit(
+        principal.user_id, "matches.discover", None, f"count={len(matches)}"
+    )
+    return {"items": matches, "total": len(matches)}
 
 
 @app.post("/races/sync", dependencies=[Depends(control_rate_limit)])

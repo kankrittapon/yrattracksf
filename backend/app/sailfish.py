@@ -46,14 +46,32 @@ class SailfishClient:
     async def discover_races(self) -> list[dict[str, Any]]:
         if not self.access_token:
             await self.login()
-        response = await self.http.get(
-            "/sf-admin/api/admin-api/match/match/page",
-            headers=self._admin_headers(),
-            params={"orderByColumn": "matchStart", "isAsc": "descending", "pageNo": 1, "pageSize": 50},
-        )
-        response.raise_for_status()
-        body = response.json().get("data") or {}
-        return body.get("list") or body.get("records") or []
+        page_no = 1
+        page_size = 50
+        discovered: list[dict[str, Any]] = []
+        while True:
+            response = await self.http.get(
+                "/sf-admin/api/admin-api/match/match/page",
+                headers=self._admin_headers(),
+                params={
+                    "orderByColumn": "matchStart",
+                    "isAsc": "descending",
+                    "pageNo": page_no,
+                    "pageSize": page_size,
+                },
+            )
+            response.raise_for_status()
+            body = response.json().get("data") or {}
+            rows = body.get("list") or body.get("records") or []
+            discovered.extend(rows)
+            try:
+                total = int(body.get("total") or len(discovered))
+            except (TypeError, ValueError):
+                total = len(discovered)
+            if not rows or len(discovered) >= total or len(rows) < page_size:
+                break
+            page_no += 1
+        return discovered
 
     async def sync_races(self, match_cd: str) -> list[dict[str, Any]]:
         if not self.access_token:
