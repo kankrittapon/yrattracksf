@@ -507,17 +507,39 @@ function HistoryWorkspace() {
   const reload = useCallback(async () => {
     const next = await loadWorkspaceData();
     setData(next);
-    setMatchCd((current) => next.matches.some((item) => item.match_cd === current) ? current : next.matches[0]?.match_cd || "");
+    const finishedMatchIds = new Set(next.races
+      .filter((item) => item.sailfish_status === "99" && item.start_at && item.end_at)
+      .map((item) => item.match_cd));
+    const availableMatches = next.matches.filter((item) => finishedMatchIds.has(item.match_cd));
+    setMatchCd((current) => availableMatches.some((item) => item.match_cd === current)
+      ? current
+      : availableMatches[0]?.match_cd || "");
   }, []);
   useEffect(() => { void reload(); }, [reload]);
   useEffect(() => {
     const timer = window.setInterval(() => void reload(), 5000);
     return () => window.clearInterval(timer);
   }, [reload]);
-  const finished = data.races.filter((item) => item.match_cd === matchCd && item.sailfish_status === "99");
+  const finished = data.races.filter((item) =>
+    item.match_cd === matchCd
+    && item.sailfish_status === "99"
+    && Boolean(item.start_at)
+    && Boolean(item.end_at));
+  const finishedMatchIds = new Set(data.races
+    .filter((item) => item.sailfish_status === "99" && item.start_at && item.end_at)
+    .map((item) => item.match_cd));
+  const matchOptions = data.matches.filter((item) => finishedMatchIds.has(item.match_cd));
   const classes = [...new Map(finished.map((item) => [item.level_cd || "", classNameOf(item)])).entries()];
   const visible = finished.filter((item) => !classFilter || item.level_cd === classFilter);
   const importMap = new Map(data.imports.map((item) => [item.race_cd, item]));
+  const importable = visible.filter((race) => {
+    const job = importMap.get(race.race_cd);
+    return !race.history_imported_at && job?.status !== "completed"
+      && job?.status !== "running" && job?.status !== "pending";
+  });
+  const scopeLabel = classFilter
+    ? classes.find(([value]) => value === classFilter)?.[1] || "ประเภทที่เลือก"
+    : "ทุกประเภท";
   const viewRace = data.races.find((item) => item.race_cd === viewRaceCd);
   useEffect(() => {
     if (!viewRaceCd) return setTeams([]);
@@ -543,20 +565,28 @@ function HistoryWorkspace() {
     <section className="panel match-toolbar">
       <div className="match-picker-row">
         <label>รายการแข่งขัน<select value={matchCd} onChange={(event) => {setMatchCd(event.target.value); setClassFilter(""); setSelected(new Set());}}>
-          {data.matches.map((item) => <option value={item.match_cd} key={item.match_cd}>{item.name}</option>)}
+          {!matchOptions.length && <option value="">ยังไม่มีรายการที่จบการแข่งขัน</option>}
+          {matchOptions.map((item) => <option value={item.match_cd} key={item.match_cd}>{readableMatchName(item.match_cd, item.name, data.races)}</option>)}
         </select></label>
       </div>
       <div className="class-filter">
-        <button className={!classFilter ? "active" : ""} onClick={() => setClassFilter("")}>ทุกประเภท ({finished.length})</button>
-        {classes.map(([value, label]) => <button className={classFilter === value ? "active" : ""} key={value} onClick={() => setClassFilter(value)}>{label} ({finished.filter((item) => item.level_cd === value).length})</button>)}
+        <button className={!classFilter ? "active" : ""} onClick={() => {setClassFilter(""); setSelected(new Set());}}>ทุกประเภท ({finished.length})</button>
+        {classes.map(([value, label]) => <button className={classFilter === value ? "active" : ""} key={value} onClick={() => {setClassFilter(value); setSelected(new Set());}}>{label} ({finished.filter((item) => item.level_cd === value).length})</button>)}
       </div>
     </section>
     <section className="panel history-import-list">
-      <PanelTitle icon={<Clock3/>} title="รอบที่จบแล้ว" meta={data.role === "admin" ? <button className="text-button" disabled={busy || !selected.size} onClick={() => importRaces([...selected])}>นำเข้า {selected.size} รอบที่เลือก</button> : <span>ดูได้เมื่อข้อมูลพร้อม</span>}/>
+      <PanelTitle icon={<Clock3/>} title={`รอบที่จบแล้ว · ${scopeLabel}`} meta={data.role === "admin" ? <div className="history-batch-actions">
+        <button className="text-button" disabled={busy || !importable.length} onClick={() => setSelected(new Set(importable.map((race) => race.race_cd)))}>
+          เลือกทั้งหมด ({importable.length})
+        </button>
+        <button className="text-button primary" disabled={busy || (!selected.size && !importable.length)} onClick={() => importRaces(selected.size ? [...selected] : importable.map((race) => race.race_cd))}>
+          {selected.size ? `นำเข้า ${selected.size} รอบที่เลือก` : `นำเข้าทั้ง ${scopeLabel}`}
+        </button>
+      </div> : <span>ดูได้เมื่อข้อมูลพร้อม</span>}/>
       {visible.map((race) => {
         const job = importMap.get(race.race_cd);
         const ready = Boolean(race.history_imported_at) || job?.status === "completed";
-        const selectable = data.role === "admin" && job?.status !== "running" && !ready;
+        const selectable = data.role === "admin" && !["running", "pending"].includes(job?.status || "") && !ready;
         const label = ready ? "พร้อมดูย้อนหลัง" : job?.status === "running" ? `กำลังนำเข้า ${number(job.progress_percent, 0)}%` : job?.status === "pending" ? "รอดำเนินการ" : job?.status === "error" ? "นำเข้าไม่สำเร็จ" : "ยังไม่ได้นำเข้า";
         return <div className="history-import-row" key={race.race_cd}>
           <label>{selectable && <input type="checkbox" checked={selected.has(race.race_cd)} onChange={(event) => setSelected((current) => {const next = new Set(current); event.target.checked ? next.add(race.race_cd) : next.delete(race.race_cd); return next;})}/>}<span><b>{classNameOf(race)} · {race.rounds || "ไม่ระบุรอบ"}</b><small>{bangkokTime(race.end_at)}</small></span></label>
@@ -564,7 +594,9 @@ function HistoryWorkspace() {
           <div>{ready ? <button onClick={() => setViewRaceCd(race.race_cd)}>เปิดดูย้อนหลัง</button> : data.role === "admin" && <button disabled={busy || job?.status === "running"} onClick={() => importRaces([race.race_cd])}>{job?.status === "error" ? "ลองนำเข้าใหม่" : "นำเข้ารอบนี้"}</button>}</div>
         </div>;
       })}
-      {!visible.length && <div className="table-empty">ยังไม่มีรอบที่จบในรายการนี้</div>}
+      {!matchOptions.length
+        ? <div className="table-empty">ยังไม่มีรายการที่เริ่มและจบการแข่งขัน จึงยังไม่มีข้อมูลให้นำเข้า</div>
+        : !visible.length && <div className="table-empty">ยังไม่มีรอบที่จบในรายการหรือประเภทนี้</div>}
       {notice && <div className="control-notice">{notice}</div>}
     </section>
     {viewRace && <History race={viewRace} teams={teams} role={data.role}/>}
