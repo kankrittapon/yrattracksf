@@ -100,6 +100,10 @@ export function RaceDashboard({section}: {section: Section}) {
         return item.sailfish_status === "99" && Boolean(item.history_imported_at);
       }
       if (section === "control" || section === "settings") return true;
+      if (section === "live") {
+        return item.sailfish_status === "50"
+          || (item.sailfish_status === "10" && Boolean(item.collection_enabled));
+      }
       return item.sailfish_status === "50";
     });
     setRaces(nextRaces);
@@ -244,7 +248,7 @@ export function RaceDashboard({section}: {section: Section}) {
       <div className="page-heading">
         <div><p className="eyebrow">ข้อมูลการแข่งขัน SAILFISH</p><h1>{titles[section][0]}</h1><span>{titles[section][1]}</span></div>
         <div className="race-picker">
-          <label>เลือกรอบที่กำลังแข่ง</label>
+          <label>{section === "live" ? "เลือกรอบที่เตรียมหรือกำลังแข่ง" : "เลือกรอบที่กำลังแข่ง"}</label>
           <select value={raceCd} onChange={(event) => setRaceCd(event.target.value)}>
             {!visibleRaces.length && <option value="">ยังไม่มีการแข่งขัน</option>}
             {visibleRaces.map((item) => <option value={item.race_cd} key={item.race_cd}>{item.name || item.race_cd} · {item.rounds || "—"} · {raceStatusLabel[item.sailfish_status || ""] || "ไม่ทราบสถานะ"}</option>)}
@@ -256,7 +260,9 @@ export function RaceDashboard({section}: {section: Section}) {
       {loading ? <LoadingState/> : !race ? <EmptyState/> : (
         <>
           {section === "overview" && <Overview race={race} collector={collector} wind={wind} athletes={athletes} liveCount={liveCount} teamMap={teamMap}/>}
-          {section === "live" && <LiveRace race={race} collector={collector} wind={wind} athletes={athletes} teamMap={teamMap}/>}
+          {section === "live" && (race.sailfish_status === "50"
+            ? <LiveRace race={race} collector={collector} wind={wind} athletes={athletes} teamMap={teamMap}/>
+            : <PreparedLiveRace race={race} collector={collector}/>)}
           {section === "compare" && <Compare athletes={athletes} teamMap={teamMap}/>}
           {section === "quality" && <Quality collector={collector} quality={quality} athletes={athletes} teams={teams}/>}
         </>
@@ -933,6 +939,38 @@ function LiveRace({race, collector, wind, athletes, teamMap}: {
       </section>
     </div>
   );
+}
+
+function PreparedLiveRace({race, collector}: {race: Race; collector: Collector | null}) {
+  const websocketReady = Boolean(collector?.websocket_connected);
+  return <div className="control-layout">
+    <section className="panel control-main">
+      <div className="control-lock">
+        <Radio/>
+        <div><b>เตรียมเก็บข้อมูลแล้ว</b><span>ระบบกำลังรอเจ้าของสนามกดเริ่มการแข่งขันใน SailFish</span></div>
+      </div>
+      <h2>{race.name || "การแข่งขัน"} · {race.rounds || "รอบปัจจุบัน"}</h2>
+      <div className="state-flow">
+        {["armed", "waiting_for_start", "recording"].map((state) =>
+          <span className={collector?.state === state ? "current" : ""} key={state}>{collectorState[state]}</span>)}
+      </div>
+      <p className="waiting-copy">เมื่อ SailFish เปลี่ยนเป็น “กำลังแข่งขัน” หน้านี้จะเปิดแผนที่ ลม และข้อมูลนักกีฬาให้อัตโนมัติ</p>
+      {!websocketReady && <div className="control-notice">
+        ช่องรับข้อมูลสดยังไม่เชื่อมต่อ กรุณาตั้งค่า SAILFISH_LIVE_TOKEN ก่อนเริ่มการแข่งขัน
+      </div>}
+    </section>
+    <section className="panel control-status">
+      <PanelTitle icon={<ShieldCheck/>} title="ความพร้อมของข้อมูลสด" meta={null}/>
+      <dl>
+        <div><dt>สถานะ SailFish</dt><dd>{raceStatusLabel[race.sailfish_status || ""] || "ไม่ทราบสถานะ"}</dd></div>
+        <div><dt>สถานะ Collector</dt><dd>{collectorState[collector?.state || "idle"]}</dd></div>
+        <div><dt>ช่องรับข้อมูลสด</dt><dd>{websocketReady ? "เชื่อมต่อแล้ว" : "ยังไม่เชื่อมต่อ"}</dd></div>
+        <div><dt>จำนวนการเชื่อมต่อใหม่</dt><dd>{collector?.reconnects || 0}</dd></div>
+        <div><dt>ข้อความที่ได้รับ</dt><dd>{collector?.messages_received || 0}</dd></div>
+        <div><dt>ข้อความล่าสุด</dt><dd>{bangkokTime(collector?.last_message_at)}</dd></div>
+      </dl>
+    </section>
+  </div>;
 }
 
 function History({race, teams, role}: {race: Race; teams: Team[]; role: string}) {
