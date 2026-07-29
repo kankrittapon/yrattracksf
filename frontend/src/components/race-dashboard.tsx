@@ -544,6 +544,13 @@ function HistoryWorkspace() {
       && job?.status !== "running" && job?.status !== "pending";
   });
   const scopeLabel = classes.find(([value]) => value === classFilter)?.[1] || "ประเภทที่เลือก";
+  const selectedMatch = data.matches.find((item) => item.match_cd === matchCd);
+  const selectedClass = visible[0]?.race_class;
+  const hasReadyHistory = visible.some((race) =>
+    Boolean(race.history_imported_at) || importMap.get(race.race_cd)?.status === "completed");
+  const historyPublicEnabled = Boolean(
+    selectedMatch?.is_public && selectedClass?.public_history_enabled
+  );
   const viewRace = data.races.find((item) => item.race_cd === viewRaceCd);
   useEffect(() => {
     if (!viewRaceCd) return setTeams([]);
@@ -597,6 +604,35 @@ function HistoryWorkspace() {
     }
   }
 
+  async function toggleHistoryPublic() {
+    if (!matchCd || !classFilter || !selectedClass) return;
+    setBusy(true);
+    try {
+      const nextEnabled = !historyPublicEnabled;
+      if (nextEnabled && !selectedMatch?.is_public) {
+        await adminRequest(`/matches/${matchCd}/visibility`, {
+          method: "POST",
+          body: JSON.stringify({is_public: true}),
+        });
+      }
+      await adminRequest(`/race-classes/${classFilter}/visibility`, {
+        method: "POST",
+        body: JSON.stringify({
+          public_live_enabled: Boolean(selectedClass.public_live_enabled),
+          public_history_enabled: nextEnabled,
+        }),
+      });
+      setNotice(nextEnabled
+        ? `เปิดผลย้อนหลัง ${scopeLabel} ให้คนทั่วไปดูแล้ว`
+        : `ปิดผลย้อนหลัง ${scopeLabel} จากหน้าสาธารณะแล้ว`);
+      await reload();
+    } catch (error) {
+      setNotice(`ตั้งค่าหน้าสาธารณะไม่สำเร็จ — ${String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return <div className="history-workspace">
     <section className="panel match-toolbar">
       <div className="match-picker-row">
@@ -625,6 +661,12 @@ function HistoryWorkspace() {
     </section>}
     {classFilter && <section className="panel history-import-list">
       <button className="history-back-to-classes" onClick={() => {setClassFilter(""); setSelected(new Set());}}>← เลือกประเภทเรืออื่น</button>
+      <div className={`history-public-action ${historyPublicEnabled ? "enabled" : ""}`}>
+        <span><ShieldCheck/><span><b>ผลย้อนหลังบนหน้าสาธารณะ</b><small>{historyPublicEnabled ? `คนทั่วไปดู ${scopeLabel} ได้แล้ว` : `ข้อมูลพร้อมแล้ว แต่ยังไม่ได้อนุญาตให้คนทั่วไปดู`}</small></span></span>
+        {data.role === "admin" && <button disabled={busy || !hasReadyHistory} onClick={toggleHistoryPublic}>
+          {historyPublicEnabled ? "ปิดผลย้อนหลังสาธารณะ" : "เปิดผลย้อนหลังให้คนทั่วไปดู"}
+        </button>}
+      </div>
       <PanelTitle icon={<Clock3/>} title={`รอบที่จบแล้ว · ${scopeLabel}`} meta={data.role === "admin" ? <div className="history-batch-actions">
         <button className="text-button" disabled={busy || !importable.length} onClick={() => setSelected(new Set(importable.map((race) => race.race_cd)))}>
           เลือกทั้งหมด ({importable.length})
