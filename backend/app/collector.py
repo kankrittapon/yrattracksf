@@ -11,12 +11,12 @@ import websockets
 
 from .config import Settings
 from .decoder import (
-    build_mark_positions,
     calculate_vmc,
     course_to_wind,
     decode_live_frame,
     normalize_team,
     normalize_wind,
+    resolve_finish_target,
 )
 from .live_token import LiveTokenProvider
 from .repository import Repository
@@ -153,14 +153,14 @@ class RaceCollector:
             instruments[0] if instruments else None,
         )
         main_wind = normalize_wind(main_instrument) if main_instrument else None
-        mark_positions = build_mark_positions(snapshot)
+        finish_target = resolve_finish_target(snapshot)
         stored = 0
         for team in snapshot.get("teamList") or []:
             if team.get("teamCd"):
                 self._entity_types[str(team["teamCd"]).lower()] = "athlete"
             row = normalize_team(team)
             row["source"] = source
-            row.update(calculate_vmc(row, mark_positions))
+            row.update(calculate_vmc(row, finish_target))
             if (
                 main_wind
                 and row["captured_at_ms"]

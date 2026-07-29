@@ -38,10 +38,13 @@ def build_mark_positions(snapshot: dict[str, Any]) -> dict[str, tuple[float, flo
     """Map navigationMarkName -> (lat, lon), aliasing the finish line to the start line.
 
     SailFish's ``navigationMark`` entries carry no coordinates of their own;
-    the coordinates live in the parallel ``markpositions`` array. In course
-    layouts that reuse the start line as the finish line, ``markpositions``
-    only has one entry per physical buoy, so the finish marks are aliased to
-    the start marks they share a position with.
+    the coordinates live in the parallel ``markpositions`` array, in the same
+    order as the non-finish entries of ``navigationMark``. ``markpositions``
+    only grows entries for marks that have actually been set/reported so far
+    (course marks past the ones sailed this race may still be missing), so
+    it is frequently shorter than the non-finish mark list — zip only maps
+    what's available rather than requiring an exact count match, so marks
+    that ARE resolvable aren't discarded just because later ones aren't.
     """
     marks = snapshot.get("navigationMark") or []
     positions = snapshot.get("markpositions") or []
@@ -49,29 +52,38 @@ def build_mark_positions(snapshot: dict[str, Any]) -> dict[str, tuple[float, flo
     non_finish = [mark for mark in marks if mark.get("position") not in finish_positions]
 
     resolved: dict[str, tuple[float, float]] = {}
-    if len(non_finish) == len(positions):
-        for mark, point in zip(non_finish, positions):
-            name = mark.get("navigationMarkName")
-            lat, lon = point.get("lat"), point.get("lng")
-            if name and lat not in (None, "") and lon not in (None, ""):
-                resolved[str(name)] = (float(lat), float(lon))
+    for mark, point in zip(non_finish, positions):
+        name = mark.get("navigationMarkName")
+        lat, lon = point.get("lat"), point.get("lng")
+        if name and lat not in (None, "") and lon not in (None, ""):
+            resolved[str(name)] = (float(lat), float(lon))
 
-        by_position = {mark.get("position"): mark.get("navigationMarkName") for mark in marks}
-        for start_key, finish_key in (("startA", "finishA"), ("startB", "finishB")):
-            start_name = by_position.get(start_key)
-            finish_name = by_position.get(finish_key)
-            if start_name in resolved and finish_name:
-                resolved[str(finish_name)] = resolved[start_name]
+    by_position = {mark.get("position"): mark.get("navigationMarkName") for mark in marks}
+    for start_key, finish_key in (("startA", "finishA"), ("startB", "finishB")):
+        start_name = by_position.get(start_key)
+        finish_name = by_position.get(finish_key)
+        if start_name in resolved and finish_name:
+            resolved[str(finish_name)] = resolved[start_name]
     return resolved
 
 
-def resolve_mark_target(
-    mark_positions: dict[str, tuple[float, float]], mark_label: str | None
-) -> tuple[float, float] | None:
-    """Resolve a runtime mark label (e.g. "3p", or a gate/line like "4s/4p") to a target point."""
-    if not mark_label:
-        return None
-    points = [mark_positions[token] for token in mark_label.split("/") if token in mark_positions]
+def resolve_finish_target(snapshot: dict[str, Any]) -> tuple[float, float] | None:
+    """Position of the finish line (average of finishA/finishB).
+
+    Intermediate course marks (1, 2, 3p, ...) frequently have no GPS fix
+    reported at all for a given race, which would leave VMC null most of
+    the time if measured against "whichever mark the team is currently
+    sailing toward". The finish line is the one target that's reliably
+    known for the whole race (it's either the finish gate itself or the
+    start line it's aliased to on windward/leeward courses) - matching how
+    SailFish's own site keeps its VMC column populated continuously rather
+    than going blank between marks.
+    """
+    marks = snapshot.get("navigationMark") or []
+    positions = build_mark_positions(snapshot)
+    by_position = {mark.get("position"): mark.get("navigationMarkName") for mark in marks}
+    finish_names = [by_position.get(key) for key in ("finishA", "finishB")]
+    points = [positions[name] for name in finish_names if name and name in positions]
     if not points:
         return None
     return (
@@ -81,26 +93,22 @@ def resolve_mark_target(
 
 
 def calculate_vmc(
-    row: dict[str, Any], mark_positions: dict[str, tuple[float, float]]
+    row: dict[str, Any], finish_target: tuple[float, float] | None
 ) -> dict[str, float | None]:
-    """Velocity Made good on Course: the speed component toward the team's next mark.
+    """Velocity Made good on Course: the speed component toward the finish line.
 
-    Mirrors ``course_to_wind`` but measures the bearing to the next race mark
-    instead of the wind direction, matching what SailFish's own site labels
-    "VMC" (distinct from VMG, which is relative to the wind).
+    Mirrors ``course_to_wind`` but measures the bearing to the finish
+    instead of the wind direction.
     """
-    raw_runtime = row.get("raw_runtime") or []
-    mark_label = raw_runtime[14] if len(raw_runtime) > 14 else None
-    target = resolve_mark_target(mark_positions, mark_label or None)
     if (
-        target is None
+        finish_target is None
         or row.get("sog_knots") is None
         or row.get("cog_degree") is None
         or row.get("latitude") is None
         or row.get("longitude") is None
     ):
         return {"vmc_knots": None}
-    bearing = bearing_degree(row["latitude"], row["longitude"], target[0], target[1])
+    bearing = bearing_degree(row["latitude"], row["longitude"], finish_target[0], finish_target[1])
     signed = wrap_to_180(row["cog_degree"] - bearing)
     return {"vmc_knots": row["sog_knots"] * math.cos(math.radians(signed))}
 

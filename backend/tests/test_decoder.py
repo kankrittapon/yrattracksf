@@ -10,7 +10,7 @@ from app.decoder import (
     decode_live_frame,
     decode_snapshot_result,
     normalize_team,
-    resolve_mark_target,
+    resolve_finish_target,
     wrap_to_180,
 )
 
@@ -57,49 +57,73 @@ def test_build_mark_positions_aliases_finish_to_start_line() -> None:
     assert positions["finishB"] == positions["startB"]
 
 
-def test_resolve_mark_target_averages_gate_marks() -> None:
-    positions = {"4s": (10.0, 20.0), "4p": (12.0, 22.0)}
-    assert resolve_mark_target(positions, "4s/4p") == (11.0, 21.0)
-    assert resolve_mark_target(positions, "4s") == (10.0, 20.0)
-    assert resolve_mark_target(positions, "unknown") is None
-    assert resolve_mark_target(positions, None) is None
-
-
-def test_calculate_vmc_matches_sog_when_heading_straight_at_mark() -> None:
-    mark_positions = {"1": (1.0, 0.0)}
-    row = {
-        "sog_knots": 5.0,
-        "cog_degree": 0.0,
-        "latitude": 0.0,
-        "longitude": 0.0,
-        "raw_runtime": [""] * 14 + ["1"],
+def test_build_mark_positions_maps_partial_marks_when_later_marks_unset() -> None:
+    # Real-world case: navigationMark lists every possible course mark, but
+    # markpositions only grows entries for marks actually set so far -
+    # course marks past the ones sailed this race can be missing entirely.
+    snapshot = {
+        "navigationMark": [
+            {"position": "startA", "navigationMarkName": "startA"},
+            {"position": "startB", "navigationMarkName": "startB"},
+            {"position": "finishA", "navigationMarkName": "finishA"},
+            {"position": "finishB", "navigationMarkName": "finishB"},
+            {"position": "point", "navigationMarkName": "1"},
+            {"position": "point", "navigationMarkName": "2"},
+            {"position": "point", "navigationMarkName": "3p"},
+            {"position": "point", "navigationMarkName": "4p"},
+            {"position": "point", "navigationMarkName": "4s"},
+        ],
+        "markpositions": [
+            {"lat": 12.0, "lng": 100.0},
+            {"lat": 12.1, "lng": 100.1},
+            {"lat": 12.2, "lng": 100.2},
+        ],
     }
-    result = calculate_vmc(row, mark_positions)
+    positions = build_mark_positions(snapshot)
+    assert positions["startA"] == (12.0, 100.0)
+    assert positions["startB"] == (12.1, 100.1)
+    assert positions["1"] == (12.2, 100.2)
+    assert "2" not in positions
+    assert "3p" not in positions
+    assert positions["finishA"] == positions["startA"]
+    assert positions["finishB"] == positions["startB"]
+
+
+def test_resolve_finish_target_averages_finish_marks() -> None:
+    snapshot = {
+        "navigationMark": [
+            {"position": "startA", "navigationMarkName": "startA"},
+            {"position": "startB", "navigationMarkName": "startB"},
+            {"position": "finishA", "navigationMarkName": "finishA"},
+            {"position": "finishB", "navigationMarkName": "finishB"},
+        ],
+        "markpositions": [
+            {"lat": 10.0, "lng": 20.0},
+            {"lat": 12.0, "lng": 22.0},
+        ],
+    }
+    assert resolve_finish_target(snapshot) == (11.0, 21.0)
+
+
+def test_resolve_finish_target_none_when_unresolvable() -> None:
+    assert resolve_finish_target({"navigationMark": [], "markpositions": []}) is None
+
+
+def test_calculate_vmc_matches_sog_when_heading_straight_at_target() -> None:
+    row = {"sog_knots": 5.0, "cog_degree": 0.0, "latitude": 0.0, "longitude": 0.0}
+    result = calculate_vmc(row, (1.0, 0.0))
     assert round(result["vmc_knots"], 5) == 5.0
 
 
-def test_calculate_vmc_negative_when_heading_away_from_mark() -> None:
-    mark_positions = {"1": (1.0, 0.0)}
-    row = {
-        "sog_knots": 5.0,
-        "cog_degree": 180.0,
-        "latitude": 0.0,
-        "longitude": 0.0,
-        "raw_runtime": [""] * 14 + ["1"],
-    }
-    result = calculate_vmc(row, mark_positions)
+def test_calculate_vmc_negative_when_heading_away_from_target() -> None:
+    row = {"sog_knots": 5.0, "cog_degree": 180.0, "latitude": 0.0, "longitude": 0.0}
+    result = calculate_vmc(row, (1.0, 0.0))
     assert round(result["vmc_knots"], 5) == -5.0
 
 
-def test_calculate_vmc_none_when_mark_unresolved() -> None:
-    row = {
-        "sog_knots": 5.0,
-        "cog_degree": 0.0,
-        "latitude": 0.0,
-        "longitude": 0.0,
-        "raw_runtime": [""] * 14 + ["unknown-mark"],
-    }
-    assert calculate_vmc(row, {}) == {"vmc_knots": None}
+def test_calculate_vmc_none_when_target_unresolved() -> None:
+    row = {"sog_knots": 5.0, "cog_degree": 0.0, "latitude": 0.0, "longitude": 0.0}
+    assert calculate_vmc(row, None) == {"vmc_knots": None}
 
 
 def test_normalize_team_uses_team_identity() -> None:

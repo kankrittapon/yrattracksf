@@ -1,7 +1,7 @@
 "use client";
 
 import {useCallback, useEffect, useMemo, useState} from "react";
-import {Activity, Anchor, Clock3, Compass, Gauge, Radio, Satellite, Wind} from "lucide-react";
+import {Activity, Anchor, Clock3, Compass, Gauge, Play, Radio, RotateCcw, Satellite, Square, Wind} from "lucide-react";
 import {createClient} from "@/lib/supabase/client";
 import {bangkokTime, directionName, freshness, mapErrorMessage, number} from "@/lib/format";
 import {useVisibleInterval} from "@/lib/use-visible-interval";
@@ -323,7 +323,22 @@ function AthleteDetail({
   rows: PublicAthlete[];
   live?: boolean;
 }) {
-  const latest = rows.at(-1);
+  const [cursor, setCursor] = useState(Math.max(0, rows.length - 1));
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  useEffect(() => {
+    setCursor(Math.max(0, rows.length - 1));
+    setPlaying(false);
+  }, [rows]);
+  useEffect(() => {
+    if (live || !playing || rows.length < 2) return;
+    const timer = window.setInterval(() => {
+      setCursor((value) => value >= rows.length - 1 ? 0 : value + 1);
+    }, 1000 / speed);
+    return () => window.clearInterval(timer);
+  }, [live, playing, rows.length, speed]);
+  const current = live ? rows.at(-1) : rows[cursor];
+  const canScrub = !live && rows.length > 1;
   return <section className="public-history-grid">
     <aside className="public-roster"><h3>เลือกนักกีฬา</h3>{athletes.map((item) =>
       <button className={teamCd === item.team_cd ? "active" : ""} key={item.team_cd} onClick={() => onSelect(item.team_cd)}>
@@ -332,21 +347,49 @@ function AthleteDetail({
     </aside>
     <div className="public-history-panel"><h3>{selected?.team_name || "ข้อมูลนักกีฬา"}</h3>
       <div className="public-metrics compact">
-        <Metric icon={<Compass/>} label="ทิศทางล่าสุด (COG)" value={`${number(latest?.cog_degree, 0)}°`} sub={bangkokTime(latest?.captured_at_ms)}/>
-        <Metric icon={<Wind/>} label="ความเร็วลมล่าสุด" value={`${number(latest?.wind_speed_knots)} นอต`} sub={directionName(latest?.wind_direction_degree)}/>
-        <Metric icon={<Compass/>} label="ทิศลมล่าสุด" value={`${number(latest?.wind_direction_degree, 0)}°`} sub="ทิศที่ลมพัดมา"/>
-        <Metric icon={<Wind/>} label="มุมเส้นทางเทียบลม" value={latest?.relative_angle_degree == null ? "—" : `${number(latest.relative_angle_degree, 0)}°`} sub="คำนวณจากทิศทางและลม"/>
-        <Metric icon={<Gauge/>} label="VMC ล่าสุด" value={`${number(latest?.vmc_knots)} นอต`} sub={`${rows.length} จุดข้อมูล`}/>
+        <Metric icon={<Compass/>} label={live ? "ทิศทางล่าสุด (COG)" : "ทิศทาง (COG)"} value={`${number(current?.cog_degree, 0)}°`} sub={bangkokTime(current?.captured_at_ms)}/>
+        <Metric icon={<Wind/>} label={live ? "ความเร็วลมล่าสุด" : "ความเร็วลม"} value={`${number(current?.wind_speed_knots)} นอต`} sub={directionName(current?.wind_direction_degree)}/>
+        <Metric icon={<Compass/>} label={live ? "ทิศลมล่าสุด" : "ทิศลม"} value={`${number(current?.wind_direction_degree, 0)}°`} sub="ทิศที่ลมพัดมา"/>
+        <Metric icon={<Wind/>} label="มุมเส้นทางเทียบลม" value={current?.relative_angle_degree == null ? "—" : `${number(current.relative_angle_degree, 0)}°`} sub="คำนวณจากทิศทางและลม"/>
+        <Metric icon={<Gauge/>} label={live ? "VMC ล่าสุด" : "VMC"} value={`${number(current?.vmc_knots)} นอต`} sub={`${rows.length} จุดข้อมูล`}/>
       </div>
-      <HistoryChart rows={rows} live={live}/>
+      {canScrub && <div className="replay-controls">
+        <button aria-label="กลับไปจุดเริ่มต้น" onClick={() => {setPlaying(false); setCursor(0);}}><RotateCcw/></button>
+        <button className="play" aria-label={playing ? "หยุดชั่วคราว" : "เล่นย้อนหลัง"} onClick={() => setPlaying((value) => !value)}>{playing ? <Square/> : <Play/>}</button>
+        <input
+          className="timeline-input"
+          aria-label="ตำแหน่งเวลาในการเล่นย้อนหลัง"
+          type="range"
+          min="0"
+          max={rows.length - 1}
+          value={cursor}
+          onChange={(event) => {setPlaying(false); setCursor(Number(event.target.value));}}
+        />
+        <select aria-label="ความเร็วการเล่น" value={speed} onChange={(event) => setSpeed(Number(event.target.value))}>
+          <option value=".5">0.5×</option><option value="1">1×</option><option value="2">2×</option><option value="5">5×</option>
+        </select>
+      </div>}
+      <HistoryChart rows={rows} live={live} cursor={live ? undefined : cursor}/>
     </div>
   </section>;
 }
 
-function HistoryChart({rows, live = false}: {rows: PublicAthlete[]; live?: boolean}) {
+function HistoryChart({rows, live = false, cursor}: {rows: PublicAthlete[]; live?: boolean; cursor?: number}) {
   if (!rows.length) return <div className="public-chart-empty">{live ? "กำลังรอข้อมูลสดของนักกีฬา…" : "กำลังโหลดข้อมูลย้อนหลัง…"}</div>;
   const values = rows.map((row) => row.sog_knots || 0);
   const max = Math.max(...values, 1);
-  const points = values.map((value, index) => `${index / Math.max(values.length - 1, 1) * 100},${94 - value / max * 82}`).join(" ");
-  return <div className="public-chart"><div><b>ความเร็วตามเวลา</b><span>{live ? "อัปเดตแบบเรียลไทม์ · " : ""}แสดงหนึ่งจุดทุก 5 วินาที</span></div><svg viewBox="0 0 100 100" preserveAspectRatio="none"><polyline points={points}/></svg></div>;
+  const toXY = (value: number, index: number) => ({
+    x: index / Math.max(values.length - 1, 1) * 100,
+    y: 94 - value / max * 82,
+  });
+  const points = values.map((value, index) => { const p = toXY(value, index); return `${p.x},${p.y}`; }).join(" ");
+  const marker = cursor != null && rows[cursor] ? toXY(values[cursor], cursor) : null;
+  return <div className="public-chart">
+    <div><b>ความเร็วตามเวลา</b><span>{live ? "อัปเดตแบบเรียลไทม์ · " : ""}แสดงหนึ่งจุดทุก 5 วินาที</span></div>
+    <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+      <polyline points={points}/>
+      {marker && <line className="chart-cursor-line" x1={marker.x} y1="0" x2={marker.x} y2="100"/>}
+      {marker && <circle className="chart-cursor-dot" cx={marker.x} cy={marker.y} r="1.8"/>}
+    </svg>
+  </div>;
 }
