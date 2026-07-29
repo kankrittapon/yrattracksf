@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .config import Settings
-from .decoder import course_to_wind, normalize_team, normalize_wind
+from .decoder import build_mark_positions, calculate_vmc, course_to_wind, normalize_team, normalize_wind
 from .repository import Repository
 from .sailfish import SailfishClient
 
@@ -209,6 +209,9 @@ class HistoryImportManager:
             (key for key, item in wind_meta.items() if item.get("rollType") == "main"),
             next(iter(wind_meta), None),
         )
+        # Marks rarely move mid-race; the snapshot taken at end_ms is a
+        # reasonable stand-in for the whole race's mark layout.
+        mark_positions = build_mark_positions(snapshot)
 
         span_minutes = 6
         span_ms = span_minutes * 60_000
@@ -242,6 +245,7 @@ class HistoryImportManager:
                         row = normalize_team({**team_meta[key], "raceCd": race_cd, "runtime": runtime})
                         if row["captured_at_ms"]:
                             row["phase"] = "recording"
+                            row.update(calculate_vmc(row, mark_positions))
                             athlete_rows.append(row)
                     elif key in wind_meta:
                         row = normalize_wind({**wind_meta[key], "raceCd": race_cd, "runtime": runtime})

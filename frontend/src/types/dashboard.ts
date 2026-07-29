@@ -69,6 +69,7 @@ export interface AthleteState {
   relative_signed_degree: number | null;
   relative_angle_degree: number | null;
   upwind_vmg_knots: number | null;
+  vmc_knots: number | null;
   updated_at: string;
 }
 

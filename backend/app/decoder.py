@@ -25,6 +25,86 @@ def course_to_wind(sog_knots: float, cog_degree: float, wind_from_degree: float)
     }
 
 
+def bearing_degree(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Initial great-circle bearing (0-360, 0 = north) from point 1 to point 2."""
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    delta_lon = math.radians(lon2 - lon1)
+    x = math.sin(delta_lon) * math.cos(phi2)
+    y = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(delta_lon)
+    return math.degrees(math.atan2(x, y)) % 360.0
+
+
+def build_mark_positions(snapshot: dict[str, Any]) -> dict[str, tuple[float, float]]:
+    """Map navigationMarkName -> (lat, lon), aliasing the finish line to the start line.
+
+    SailFish's ``navigationMark`` entries carry no coordinates of their own;
+    the coordinates live in the parallel ``markpositions`` array. In course
+    layouts that reuse the start line as the finish line, ``markpositions``
+    only has one entry per physical buoy, so the finish marks are aliased to
+    the start marks they share a position with.
+    """
+    marks = snapshot.get("navigationMark") or []
+    positions = snapshot.get("markpositions") or []
+    finish_positions = {"finishA", "finishB"}
+    non_finish = [mark for mark in marks if mark.get("position") not in finish_positions]
+
+    resolved: dict[str, tuple[float, float]] = {}
+    if len(non_finish) == len(positions):
+        for mark, point in zip(non_finish, positions):
+            name = mark.get("navigationMarkName")
+            lat, lon = point.get("lat"), point.get("lng")
+            if name and lat not in (None, "") and lon not in (None, ""):
+                resolved[str(name)] = (float(lat), float(lon))
+
+        by_position = {mark.get("position"): mark.get("navigationMarkName") for mark in marks}
+        for start_key, finish_key in (("startA", "finishA"), ("startB", "finishB")):
+            start_name = by_position.get(start_key)
+            finish_name = by_position.get(finish_key)
+            if start_name in resolved and finish_name:
+                resolved[str(finish_name)] = resolved[start_name]
+    return resolved
+
+
+def resolve_mark_target(
+    mark_positions: dict[str, tuple[float, float]], mark_label: str | None
+) -> tuple[float, float] | None:
+    """Resolve a runtime mark label (e.g. "3p", or a gate/line like "4s/4p") to a target point."""
+    if not mark_label:
+        return None
+    points = [mark_positions[token] for token in mark_label.split("/") if token in mark_positions]
+    if not points:
+        return None
+    return (
+        sum(point[0] for point in points) / len(points),
+        sum(point[1] for point in points) / len(points),
+    )
+
+
+def calculate_vmc(
+    row: dict[str, Any], mark_positions: dict[str, tuple[float, float]]
+) -> dict[str, float | None]:
+    """Velocity Made good on Course: the speed component toward the team's next mark.
+
+    Mirrors ``course_to_wind`` but measures the bearing to the next race mark
+    instead of the wind direction, matching what SailFish's own site labels
+    "VMC" (distinct from VMG, which is relative to the wind).
+    """
+    raw_runtime = row.get("raw_runtime") or []
+    mark_label = raw_runtime[14] if len(raw_runtime) > 14 else None
+    target = resolve_mark_target(mark_positions, mark_label or None)
+    if (
+        target is None
+        or row.get("sog_knots") is None
+        or row.get("cog_degree") is None
+        or row.get("latitude") is None
+        or row.get("longitude") is None
+    ):
+        return {"vmc_knots": None}
+    bearing = bearing_degree(row["latitude"], row["longitude"], target[0], target[1])
+    signed = wrap_to_180(row["cog_degree"] - bearing)
+    return {"vmc_knots": row["sog_knots"] * math.cos(math.radians(signed))}
+
+
 def decode_snapshot_result(compressed: str) -> dict[str, Any]:
     value = compressed.replace(" ", "+")
     decoded = None
@@ -83,6 +163,7 @@ def normalize_team(team: dict[str, Any]) -> dict[str, Any]:
         "relative_angle_degree": None,
         "upwind_vmg_knots": None,
         "wind_reading_captured_at_ms": None,
+        "vmc_knots": None,
         "raw_runtime": runtime,
     }
 

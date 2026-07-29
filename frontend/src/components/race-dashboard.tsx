@@ -915,7 +915,7 @@ function History({race, teams, role}: {race: Race; teams: Team[]; role: string})
     if (!selectedTeam) return;
     const supabase = createClient();
     void supabase.from("athlete_readings")
-      .select("race_cd,team_cd,captured_at_ms,sog_knots,cog_degree,latitude,longitude,relative_signed_degree,relative_angle_degree,upwind_vmg_knots,created_at")
+      .select("race_cd,team_cd,captured_at_ms,sog_knots,cog_degree,latitude,longitude,relative_signed_degree,relative_angle_degree,upwind_vmg_knots,vmc_knots,created_at")
       .eq("race_cd", race.race_cd)
       .eq("team_cd", selectedTeam)
       .order("captured_at_ms", {ascending: true})
@@ -940,12 +940,12 @@ function History({race, teams, role}: {race: Race; teams: Team[]; role: string})
     if (role !== "admin") return;
     const supabase = createClient();
     const {data} = await supabase.from("athlete_readings")
-      .select("team_cd,captured_at_ms,sog_knots,cog_degree,latitude,longitude,relative_signed_degree,relative_angle_degree,upwind_vmg_knots")
+      .select("team_cd,captured_at_ms,sog_knots,cog_degree,latitude,longitude,relative_signed_degree,relative_angle_degree,upwind_vmg_knots,vmc_knots")
       .eq("race_cd", race.race_cd)
       .order("captured_at_ms")
       .limit(100000);
     const rows = data || [];
-    const columns = ["team_cd","captured_at_ms","sog_knots","cog_degree","latitude","longitude","relative_signed_degree","relative_angle_degree","upwind_vmg_knots"];
+    const columns = ["team_cd","captured_at_ms","sog_knots","cog_degree","latitude","longitude","relative_signed_degree","relative_angle_degree","upwind_vmg_knots","vmc_knots"];
     const csv = [columns.join(","), ...rows.map((row) => columns.map((key) => JSON.stringify((row as Record<string, unknown>)[key] ?? "")).join(","))].join("\n");
     const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], {type: "text/csv;charset=utf-8"}));
     const link = document.createElement("a");
@@ -1030,7 +1030,7 @@ function Compare({athletes, teamMap}: {athletes: AthleteState[]; teamMap: Map<st
             <div className="comparison-metrics">
               <Metric label="ทิศทางการเคลื่อนที่ (COG)" value={`${number(athlete.cog_degree, 0)}°`} sub="องศา" icon={<Compass/>}/>
               <Metric label="มุมเส้นทางเทียบลม" value={`${number(athlete.relative_angle_degree, 0)}°`} sub="องศา" icon={<Wind/>}/>
-              <Metric label="VMC" value={number(athlete.upwind_vmg_knots)} sub="นอต" icon={<ArrowRight/>}/>
+              <Metric label="VMC" value={number(athlete.vmc_knots)} sub="นอต" icon={<ArrowRight/>}/>
             </div>
           </section>;
         })}
@@ -1103,7 +1103,7 @@ function AthleteTable({athletes, teamMap}: {athletes: AthleteState[]; teamMap: M
           <span><b>{team?.sail_no || "—"}</b><i>{team?.team_name || athlete.team_cd.slice(0, 8)}</i></span>
           <span>{number(athlete.cog_degree, 0)}°</span>
           <span>{number(athlete.relative_angle_degree, 0)}°</span>
-          <span className={(athlete.upwind_vmg_knots || 0) >= 0 ? "positive" : "negative"}>{number(athlete.upwind_vmg_knots)}<small> นอต</small></span>
+          <span className={(athlete.vmc_knots || 0) >= 0 ? "positive" : "negative"}>{number(athlete.vmc_knots)}<small> นอต</small></span>
           <span><StatusDot state={fresh.className} label={fresh.label}/></span>
         </div>;
       })}
@@ -1176,7 +1176,7 @@ function AthleteDirectionTable({athletes, teamMap}: {athletes: AthleteState[]; t
         <span className={relative == null ? "" : relative >= 0 ? "positive" : "negative"}>
           {relative == null ? "—" : `${relative > 0 ? "+" : ""}${number(relative, 0)}°`}
         </span>
-        <span>{athlete.upwind_vmg_knots == null ? "—" : `${number(athlete.upwind_vmg_knots)} นอต`}</span>
+        <span>{athlete.vmc_knots == null ? "—" : `${number(athlete.vmc_knots)} นอต`}</span>
       </div>;
     })}
     {!athletes.length && <div className="table-empty">รอข้อมูลนักกีฬา</div>}

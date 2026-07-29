@@ -34,6 +34,7 @@ interface PublicAthlete {
   relative_signed_degree: number | null;
   relative_angle_degree: number | null;
   upwind_vmg_knots: number | null;
+  vmc_knots?: number | null;
   updated_at?: string | null;
 }
 
@@ -291,7 +292,7 @@ export default function PublicTelemetryPage() {
                 <span><b>{item.sail_no || "—"}</b></span><span>{item.team_name || item.team_cd}</span>
                 <span>{item.cog_degree == null ? "—" : `${number(item.cog_degree, 0)}°`}</span>
                 <span className={relative == null ? "" : relative >= 0 ? "positive" : "negative"}>{relative == null ? "—" : `${relative > 0 ? "+" : ""}${number(relative, 0)}°`}</span>
-                <span>{item.upwind_vmg_knots == null ? "—" : `${number(item.upwind_vmg_knots)} นอต`}</span>
+                <span>{item.vmc_knots == null ? "—" : `${number(item.vmc_knots)} นอต`}</span>
               </div>;
             })}
           </section>
@@ -335,7 +336,7 @@ function AthleteDetail({
         <Metric icon={<Wind/>} label="ความเร็วลมล่าสุด" value={`${number(latest?.wind_speed_knots)} นอต`} sub={directionName(latest?.wind_direction_degree)}/>
         <Metric icon={<Compass/>} label="ทิศลมล่าสุด" value={`${number(latest?.wind_direction_degree, 0)}°`} sub="ทิศที่ลมพัดมา"/>
         <Metric icon={<Wind/>} label="มุมเส้นทางเทียบลม" value={latest?.relative_angle_degree == null ? "—" : `${number(latest.relative_angle_degree, 0)}°`} sub="คำนวณจากทิศทางและลม"/>
-        <Metric icon={<Gauge/>} label="VMC ล่าสุด" value={`${number(latest?.upwind_vmg_knots)} นอต`} sub={`${rows.length} จุดข้อมูล`}/>
+        <Metric icon={<Gauge/>} label="VMC ล่าสุด" value={`${number(latest?.vmc_knots)} นอต`} sub={`${rows.length} จุดข้อมูล`}/>
       </div>
       <HistoryChart rows={rows} live={live}/>
     </div>
