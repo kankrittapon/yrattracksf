@@ -59,6 +59,7 @@ interface PublicRaceData {
     team_cd: string;
     team_name: string | null;
     sail_no: string | null;
+    tracker_no?: string | null;
     captured_at_ms: number | null;
     signal_status: "online" | "stale" | "offline";
     checked_at: string;
@@ -142,9 +143,21 @@ export default function PublicTelemetryPage() {
   const loadRace = useCallback(async () => {
     if (!raceCd) return setData(null);
     const supabase = createClient();
-    const {data: result, error} = await supabase.rpc("get_public_race", {p_race_cd: raceCd});
+    const [{data: result, error}, {data: trackerNumbers}] = await Promise.all([
+      supabase.rpc("get_public_race", {p_race_cd: raceCd}),
+      supabase.rpc("get_public_tracker_numbers", {p_race_cd: raceCd}),
+    ]);
     if (error) return setMessage(error.message);
-    setData((result || null) as PublicRaceData | null);
+    const next = (result || null) as PublicRaceData | null;
+    const numberByTeam = new Map(
+      ((trackerNumbers || []) as Array<{team_cd: string; tracker_no: string | null}>)
+        .map((item) => [item.team_cd, item.tracker_no]),
+    );
+    if (next) next.trackers = next.trackers.map((tracker) => ({
+      ...tracker,
+      tracker_no: numberByTeam.get(tracker.team_cd) || null,
+    }));
+    setData(next);
     setMessage(result ? "" : "รอบนี้ไม่ได้รับอนุญาตให้แสดง");
   }, [raceCd]);
 
@@ -235,7 +248,7 @@ export default function PublicTelemetryPage() {
           {data.trackers.length > 0 && <div className="public-tracker-list">
             {data.trackers.map((tracker) => <div key={tracker.team_cd}>
               <i className={tracker.signal_status}/>
-              <span><b>{tracker.sail_no || "—"}</b><small>{tracker.team_name || tracker.team_cd}</small></span>
+              <span><b>{tracker.sail_no || "—"}</b><small>{tracker.team_name || tracker.team_cd} · Track {tracker.tracker_no || "—"}</small></span>
               <em>{tracker.signal_status === "online" ? "ออนไลน์" : tracker.signal_status === "stale" ? "สัญญาณช้า" : "รอสัญญาณ"}</em>
             </div>)}
           </div>}
