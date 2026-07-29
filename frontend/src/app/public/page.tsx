@@ -172,23 +172,31 @@ export default function PublicTelemetryPage() {
     const firstTeam = data?.athletes[0]?.team_cd || "";
     if (!data?.athletes.some((item) => item.team_cd === teamCd)) setTeamCd(firstTeam);
   }, [data, teamCd]);
-  useEffect(() => {
-    if (mode !== "history" || !raceCd || !teamCd) return setHistory([]);
+  const loadAthleteSeries = useCallback(async () => {
+    if (!raceCd || !teamCd || (mode === "live" && data?.race.status !== "50")) {
+      setHistory([]);
+      return;
+    }
     const supabase = createClient();
-    void supabase.rpc("get_public_athlete_history", {
+    const {data: rows, error} = await supabase.rpc("get_public_athlete_history", {
       p_race_cd: raceCd,
       p_team_cd: teamCd,
       p_from_ms: null,
       p_to_ms: null,
       p_sample_seconds: 5,
-    }).then(({data: rows, error}) => {
-      if (error) return setMessage(error.message);
-      setHistory((rows || []) as PublicAthlete[]);
     });
-  }, [mode, raceCd, teamCd]);
+    if (error) return setMessage(error.message);
+    setHistory((rows || []) as PublicAthlete[]);
+  }, [data?.race.status, mode, raceCd, teamCd]);
+
+  useEffect(() => { void loadAthleteSeries(); }, [loadAthleteSeries]);
+  useEffect(() => {
+    if (mode !== "live" || data?.race.status !== "50" || !teamCd) return;
+    const timer = window.setInterval(() => void loadAthleteSeries(), 2000);
+    return () => window.clearInterval(timer);
+  }, [data?.race.status, loadAthleteSeries, mode, teamCd]);
 
   const selected = data?.athletes.find((item) => item.team_cd === teamCd) || data?.athletes[0];
-  const latestHistory = history.at(-1);
 
   return (
     <main className="public-shell">
@@ -259,17 +267,8 @@ export default function PublicTelemetryPage() {
               </div>;
             })}
           </section>
-        </> : <section className="public-history-grid">
-          <aside className="public-roster"><h3>นักกีฬา</h3>{data.athletes.map((item) => <button className={teamCd === item.team_cd ? "active" : ""} key={item.team_cd} onClick={() => setTeamCd(item.team_cd)}><b>{item.sail_no || "—"}</b><span>{item.team_name || item.team_cd}<small>{item.nationality || "—"}</small></span></button>)}</aside>
-          <div className="public-history-panel"><h3>{selected?.team_name || "ข้อมูลนักกีฬาย้อนหลัง"}</h3>
-            <div className="public-metrics compact">
-              <Metric icon={<Gauge/>} label="ความเร็วล่าสุด (SOG)" value={`${number(latestHistory?.sog_knots)} นอต`} sub={`${history.length} จุดข้อมูล`}/>
-              <Metric icon={<Compass/>} label="ทิศทางล่าสุด (COG)" value={`${number(latestHistory?.cog_degree, 0)}°`} sub={bangkokTime(latestHistory?.captured_at_ms)}/>
-              <Metric icon={<Wind/>} label="มุมเส้นทางเทียบลม" value={latestHistory?.relative_angle_degree == null ? "—" : `${number(latestHistory.relative_angle_degree, 0)}°`} sub="คำนวณจากทิศทางและลม"/>
-            </div>
-            <HistoryChart rows={history}/>
-          </div>
-        </section>}
+          <AthleteDetail athletes={data.athletes} teamCd={teamCd} onSelect={setTeamCd} selected={selected} rows={history} live/>
+        </> : <AthleteDetail athletes={data.athletes} teamCd={teamCd} onSelect={setTeamCd} selected={selected} rows={history}/>}
       </>}
       <footer className="public-footer">ทิศทุ่น − COG แสดงค่าหลังปรับให้อยู่ระหว่าง −180° ถึง 180° · COG คือทิศทางการเคลื่อนที่ ไม่ใช่ทิศหัวเรือ</footer>
     </main>
@@ -280,10 +279,45 @@ function Metric({icon, label, value, sub}: {icon: React.ReactNode; label: string
   return <div className="public-metric"><span>{icon}{label}</span><b>{value}</b><small>{sub}</small></div>;
 }
 
-function HistoryChart({rows}: {rows: PublicAthlete[]}) {
-  if (!rows.length) return <div className="public-chart-empty">กำลังโหลดข้อมูลย้อนหลัง…</div>;
+function AthleteDetail({
+  athletes,
+  teamCd,
+  onSelect,
+  selected,
+  rows,
+  live = false,
+}: {
+  athletes: PublicAthlete[];
+  teamCd: string;
+  onSelect: (teamCd: string) => void;
+  selected?: PublicAthlete;
+  rows: PublicAthlete[];
+  live?: boolean;
+}) {
+  const latest = rows.at(-1);
+  return <section className="public-history-grid">
+    <aside className="public-roster"><h3>เลือกนักกีฬา</h3>{athletes.map((item) =>
+      <button className={teamCd === item.team_cd ? "active" : ""} key={item.team_cd} onClick={() => onSelect(item.team_cd)}>
+        <b>{item.sail_no || "—"}</b><span>{item.team_name || item.team_cd}<small>{item.nationality || "—"}</small></span>
+      </button>)}
+    </aside>
+    <div className="public-history-panel"><h3>{selected?.team_name || "ข้อมูลนักกีฬา"}</h3>
+      <div className="public-metrics compact">
+        <Metric icon={<Gauge/>} label="ความเร็วล่าสุด (SOG)" value={`${number(latest?.sog_knots)} นอต`} sub={`${rows.length} จุดข้อมูล`}/>
+        <Metric icon={<Compass/>} label="ทิศทางล่าสุด (COG)" value={`${number(latest?.cog_degree, 0)}°`} sub={bangkokTime(latest?.captured_at_ms)}/>
+        <Metric icon={<Wind/>} label="ความเร็วลมล่าสุด" value={`${number(latest?.wind_speed_knots)} นอต`} sub={directionName(latest?.wind_direction_degree)}/>
+        <Metric icon={<Compass/>} label="ทิศลมล่าสุด" value={`${number(latest?.wind_direction_degree, 0)}°`} sub="ทิศที่ลมพัดมา"/>
+        <Metric icon={<Wind/>} label="มุมเส้นทางเทียบลม" value={latest?.relative_angle_degree == null ? "—" : `${number(latest.relative_angle_degree, 0)}°`} sub="คำนวณจากทิศทางและลม"/>
+      </div>
+      <HistoryChart rows={rows} live={live}/>
+    </div>
+  </section>;
+}
+
+function HistoryChart({rows, live = false}: {rows: PublicAthlete[]; live?: boolean}) {
+  if (!rows.length) return <div className="public-chart-empty">{live ? "กำลังรอข้อมูลสดของนักกีฬา…" : "กำลังโหลดข้อมูลย้อนหลัง…"}</div>;
   const values = rows.map((row) => row.sog_knots || 0);
   const max = Math.max(...values, 1);
   const points = values.map((value, index) => `${index / Math.max(values.length - 1, 1) * 100},${94 - value / max * 82}`).join(" ");
-  return <div className="public-chart"><div><b>ความเร็วตามเวลา</b><span>แสดงหนึ่งจุดทุก 5 วินาที</span></div><svg viewBox="0 0 100 100" preserveAspectRatio="none"><polyline points={points}/></svg></div>;
+  return <div className="public-chart"><div><b>ความเร็วตามเวลา</b><span>{live ? "อัปเดตทุก 2 วินาที · " : ""}แสดงหนึ่งจุดทุก 5 วินาที</span></div><svg viewBox="0 0 100 100" preserveAspectRatio="none"><polyline points={points}/></svg></div>;
 }
