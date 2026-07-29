@@ -1295,8 +1295,8 @@ function EmptyState() {
   return (
     <div className="empty-state">
       <Anchor/>
-      <h2>ยังไม่มีการแข่งขันในฐานข้อมูล</h2>
-      <p>เริ่มจากค้นหาและเชื่อมรายการแข่งขันผ่านเมนูควบคุมการเก็บข้อมูล</p>
+      <h2>ยังไม่มีรอบที่กำลังแข่งขัน</h2>
+      <p>รอบที่รอเริ่มจะอยู่ในหน้าควบคุม และจะแสดงหน้านี้เมื่อ SailFish กดเริ่มการแข่งขัน</p>
       <div className={`backend-connection ${backendStatus}`}>
         <i/>
         <span><b>ระบบเก็บข้อมูล ai-brain</b><small>{statusText}</small></span>
