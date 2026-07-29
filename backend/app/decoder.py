@@ -79,6 +79,10 @@ def normalize_team(team: dict[str, Any]) -> dict[str, Any]:
         "longitude": _number(runtime, 18),
         "captured_at_ms": _integer(runtime, 22),
         "received_at_ms": _integer(runtime, 23),
+        "relative_signed_degree": None,
+        "relative_angle_degree": None,
+        "upwind_vmg_knots": None,
+        "wind_reading_captured_at_ms": None,
         "raw_runtime": runtime,
     }
 

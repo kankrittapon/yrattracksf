@@ -41,6 +41,10 @@ def test_normalize_team_uses_team_identity() -> None:
     assert result["team_cd"] == "team-a"
     assert result["sog_knots"] == 2.5
     assert result["captured_at_ms"] == 1784963889000
+    assert result["relative_signed_degree"] is None
+    assert result["relative_angle_degree"] is None
+    assert result["upwind_vmg_knots"] is None
+    assert result["wind_reading_captured_at_ms"] is None
 
 
 def test_live_frame_types() -> None:
