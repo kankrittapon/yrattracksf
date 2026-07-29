@@ -1,7 +1,7 @@
 "use client";
 
 import {useCallback, useEffect, useMemo, useState} from "react";
-import {Activity, Anchor, Clock3, Compass, Gauge, Radio, Wind} from "lucide-react";
+import {Activity, Anchor, Clock3, Compass, Gauge, Radio, Satellite, Wind} from "lucide-react";
 import {createClient} from "@/lib/supabase/client";
 import {bangkokTime, directionName, freshness, number} from "@/lib/format";
 
@@ -46,6 +46,23 @@ interface PublicRaceData {
     start_at: string | null;
     end_at: string | null;
   };
+  tracker_status: {
+    track_open: boolean;
+    total_gps: number;
+    online_gps: number;
+    stale_gps: number;
+    offline_gps: number;
+    last_signal_at_ms: number | null;
+    checked_at: string;
+  } | null;
+  trackers: Array<{
+    team_cd: string;
+    team_name: string | null;
+    sail_no: string | null;
+    captured_at_ms: number | null;
+    signal_status: "online" | "stale" | "offline";
+    checked_at: string;
+  }>;
   wind: {
     captured_at_ms: number;
     speed_knots: number | null;
@@ -209,6 +226,20 @@ export default function PublicTelemetryPage() {
           <div><small>{data.race.match_name}</small><h2>{data.race.class_name} · {data.race.rounds}</h2><span>{data.race.race_name}</span></div>
           <div><b>{data.athletes.length}</b><small>นักกีฬา</small></div>
         </section>
+        {mode === "live" && data.race.status !== "99" && <section className={`public-track-card ${data.tracker_status?.track_open ? "open" : ""}`}>
+          <div className="public-track-summary">
+            <span><Satellite/></span>
+            <div><small>สถานะระบบติดตาม</small><h3>{data.tracker_status?.track_open ? "Track เปิดแล้ว" : "กำลังรอสัญญาณ GPS"}</h3><p>ตรวจล่าสุด {bangkokTime(data.tracker_status?.checked_at)}</p></div>
+            <div className="public-gps-count"><b>{data.tracker_status?.online_gps || 0}/{data.tracker_status?.total_gps || data.trackers.length}</b><small>GPS ออนไลน์</small></div>
+          </div>
+          {data.trackers.length > 0 && <div className="public-tracker-list">
+            {data.trackers.map((tracker) => <div key={tracker.team_cd}>
+              <i className={tracker.signal_status}/>
+              <span><b>{tracker.sail_no || "—"}</b><small>{tracker.team_name || tracker.team_cd}</small></span>
+              <em>{tracker.signal_status === "online" ? "ออนไลน์" : tracker.signal_status === "stale" ? "สัญญาณช้า" : "รอสัญญาณ"}</em>
+            </div>)}
+          </div>}
+        </section>}
         {(mode === "history" || data.race.status === "50") && <section className="public-metrics">
           <Metric icon={<Wind/>} label="ความเร็วลม" value={`${number(data.wind?.speed_knots)} นอต`} sub={bangkokTime(data.wind?.captured_at_ms)}/>
           <Metric icon={<Compass/>} label="ทิศที่ลมพัดมา" value={`${number(data.wind?.direction_degree, 0)}°`} sub={directionName(data.wind?.direction_degree)}/>

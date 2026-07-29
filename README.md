@@ -228,7 +228,9 @@ request body หรือ Authorization header; explicit log-redaction middlewar
    - การเลือกเก็บรายรอบ, Public ระดับรายการ และกติกาหยุด Live หลัง Finish
 5. `supabase/migrations/202607290003_contextual_public_visibility.sql`
    - เปิด Public ตามประเภทที่เลือก และใช้รอบที่จบเป็นสถานะรอรอบถัดไปโดยไม่ส่งข้อมูล Live
-6. `supabase/cleanup.sql`
+6. `supabase/migrations/202607290004_public_tracker_status.sql`
+   - สถานะ Track/GPS ก่อนเริ่มแข่งและ RPC สาธารณะที่ไม่เปิดเผยพิกัด
+7. `supabase/cleanup.sql`
    - pg_cron ลบ raw payload ที่หมดอายุ
 
 Supabase ต้องเปิด extension `pg_cron` ก่อนรัน cleanup

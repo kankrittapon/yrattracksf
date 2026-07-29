@@ -12,6 +12,7 @@ from .config import get_settings
 from .history import HistoryImportManager
 from .repository import Repository
 from .sailfish import SailfishClient
+from .tracker import TrackerMonitor
 from .schemas import (
     ArmRequest,
     CollectorStatus,
@@ -122,6 +123,8 @@ async def lifespan(app: FastAPI):
     app.state.sailfish = sailfish
     app.state.history = HistoryImportManager(settings, sailfish, repository)
     await app.state.history.start()
+    app.state.tracker_monitor = TrackerMonitor(settings, sailfish, repository)
+    await app.state.tracker_monitor.start()
     app.state.collectors = CollectorManager(settings, sailfish, repository)
     active_races = await repository.select(
         "races",
@@ -132,6 +135,7 @@ async def lifespan(app: FastAPI):
         await app.state.collectors.get_or_create(str(race["race_cd"])).arm()
     yield
     await app.state.collectors.shutdown()
+    await app.state.tracker_monitor.shutdown()
     await app.state.history.shutdown()
     await sailfish.close()
     await repository.close()

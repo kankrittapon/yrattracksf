@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     history_import_delay_minutes: int = 90
     history_import_retry_minutes: int = 15
     history_scheduler_interval_seconds: int = 30
+    tracker_poll_seconds: float = 5.0
+    tracker_online_seconds: int = 15
+    tracker_stale_seconds: int = 60
     raw_retention_days: int = 30
     wind_freshness_seconds: int = 5
     batch_flush_seconds: float = 1.0
