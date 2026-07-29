@@ -17,6 +17,7 @@ from .schemas import (
     CollectorStatus,
     HistoryBatchRequest,
     MatchVisibilityRequest,
+    MatchVisibilityScopeRequest,
     OverrideRequest,
     Principal,
     RaceClassVisibilityRequest,
@@ -246,6 +247,68 @@ async def set_match_visibility(
         f"{match_cd}:public={body.is_public}",
     )
     return {"match_cd": match_cd, "is_public": body.is_public}
+
+
+@app.post("/matches/{match_cd}/public-scope", dependencies=[Depends(control_rate_limit)])
+async def set_match_public_scope(
+    match_cd: str,
+    body: MatchVisibilityScopeRequest,
+    principal: Principal = Depends(require_admin),
+):
+    matches = await app.state.repository.select(
+        "matches", columns="match_cd", filters={"match_cd": f"eq.{match_cd}"}, limit=1
+    )
+    if not matches:
+        raise HTTPException(status_code=404, detail="Match not found")
+    filters = {"match_cd": match_cd}
+    if body.level_cd:
+        classes = await app.state.repository.select(
+            "race_classes",
+            columns="level_cd",
+            filters={"match_cd": f"eq.{match_cd}", "level_cd": f"eq.{body.level_cd}"},
+            limit=1,
+        )
+        if not classes:
+            raise HTTPException(status_code=404, detail="Race class not found in this match")
+        filters["level_cd"] = body.level_cd
+    await app.state.repository.update(
+        "race_classes",
+        {
+            "public_live_enabled": body.is_public,
+            "public_history_enabled": body.is_public,
+        },
+        filters,
+    )
+    if body.is_public or body.level_cd is None:
+        await app.state.repository.update(
+            "matches", {"is_public": body.is_public}, {"match_cd": match_cd}
+        )
+    elif body.level_cd:
+        remaining = await app.state.repository.select(
+            "race_classes",
+            columns="level_cd",
+            filters={
+                "match_cd": f"eq.{match_cd}",
+                "public_live_enabled": "eq.true",
+            },
+            limit=1,
+        )
+        if not remaining:
+            await app.state.repository.update(
+                "matches", {"is_public": False}, {"match_cd": match_cd}
+            )
+    scope = body.level_cd or "all"
+    await app.state.repository.audit(
+        principal.user_id,
+        "match.public_scope",
+        None,
+        f"{match_cd}:scope={scope}:public={body.is_public}",
+    )
+    return {
+        "match_cd": match_cd,
+        "level_cd": body.level_cd,
+        "is_public": body.is_public,
+    }
 
 
 @app.post("/race-classes/{level_cd}/visibility", dependencies=[Depends(control_rate_limit)])

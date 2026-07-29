@@ -305,7 +305,7 @@ async function loadWorkspaceData(): Promise<WorkspaceData> {
   const {data: {user}} = await supabase.auth.getUser();
   const [matches, races, collectors, imports, profile] = await Promise.all([
     supabase.from("matches").select("*").order("synced_at", {ascending: false}),
-    supabase.from("races").select("*,match:matches(name),race_class:race_classes(name)").order("updated_at", {ascending: false}),
+    supabase.from("races").select("*,match:matches(name),race_class:race_classes(name,public_live_enabled,public_history_enabled)").order("updated_at", {ascending: false}),
     supabase.from("collector_status").select("*"),
     supabase.from("history_imports").select("*").order("updated_at", {ascending: false}),
     user ? supabase.from("profiles").select("role").eq("id", user.id).maybeSingle() : Promise.resolve({data: null}),
@@ -321,6 +321,14 @@ async function loadWorkspaceData(): Promise<WorkspaceData> {
 
 function classNameOf(race: Race) {
   return race.race_class?.name || race.name || race.level_cd || "ไม่ระบุประเภท";
+}
+
+function readableMatchName(matchCd: string, name: string | null | undefined, races: Race[]) {
+  const normalized = (name || "").trim().replace(/\s+/g, " ");
+  const opaque = !normalized || normalized === matchCd || /^[a-f0-9]{24,}$/i.test(normalized);
+  if (!opaque) return normalized;
+  const classes = [...new Set(races.filter((race) => race.match_cd === matchCd).map(classNameOf))];
+  return classes.length ? `รายการเดิม · ${classes.slice(0, 3).join(" / ")}` : "รายการเดิมที่ยังไม่มีชื่อ";
 }
 
 function MatchControlWorkspace() {
@@ -353,15 +361,23 @@ function MatchControlWorkspace() {
   }, [matchCd]);
 
   const options = useMemo(() => {
-    const map = new Map(data.matches.map((item) => [item.match_cd, item.name]));
-    discovered.forEach((item) => map.set(item.matchCd, item.matchName || item.matchCd));
+    const map = new Map(data.matches.map((item) => [item.match_cd, readableMatchName(item.match_cd, item.name, data.races)]));
+    discovered.forEach((item) => {
+      const discoveredName = readableMatchName(item.matchCd, item.matchName, data.races);
+      if (!map.has(item.matchCd) || !discoveredName.startsWith("รายการเดิม")) map.set(item.matchCd, discoveredName);
+    });
     return [...map.entries()];
-  }, [data.matches, discovered]);
+  }, [data.matches, data.races, discovered]);
   const matchRaces = data.races.filter((item) => item.match_cd === matchCd);
   const classOptions = [...new Map(matchRaces.map((item) => [item.level_cd || "", classNameOf(item)])).entries()];
   const visible = matchRaces.filter((item) => !classFilter || item.level_cd === classFilter);
   const groups = [...new Map(visible.map((item) => [item.level_cd || "", classNameOf(item)])).entries()];
   const collectorMap = new Map(data.collectors.map((item) => [item.race_cd, item]));
+  const selectedMatch = data.matches.find((item) => item.match_cd === matchCd);
+  const scopeRaces = classFilter ? matchRaces.filter((item) => item.level_cd === classFilter) : matchRaces;
+  const scopeLabel = classFilter ? classOptions.find(([value]) => value === classFilter)?.[1] || "ประเภทที่เลือก" : "ทุกประเภท";
+  const scopeEnabled = Boolean(selectedMatch?.is_public) && scopeRaces.length > 0
+    && scopeRaces.every((item) => item.race_class?.public_live_enabled);
 
   async function discoverMatches() {
     setBusy("discover");
@@ -405,6 +421,24 @@ function MatchControlWorkspace() {
     } finally { setBusy(""); }
   }
 
+  async function togglePublicScope() {
+    if (!matchCd || !matchRaces.length) return;
+    setBusy("public");
+    try {
+      await adminRequest(`/matches/${matchCd}/public-scope`, {
+        method: "POST",
+        body: JSON.stringify({
+          is_public: !scopeEnabled,
+          level_cd: classFilter || null,
+        }),
+      });
+      setNotice(`${!scopeEnabled ? "เปิด" : "ปิด"} หน้าสาธารณะ${classFilter ? `เฉพาะ ${scopeLabel}` : "ทุกประเภท"}แล้ว · รอบที่จบจะหยุดการถ่ายทอดสดและรอรอบถัดไป`);
+      await reload();
+    } catch (error) {
+      setNotice(`ตั้งค่า Public ไม่สำเร็จ — ${String(error)}`);
+    } finally { setBusy(""); }
+  }
+
   return <div className="match-workspace">
     <section className="panel match-toolbar">
       <div className="control-lock"><LockKeyhole/><div><b>ควบคุมผ่าน TAILSCALE</b><span>เลือกรายการแข่งขันก่อน แล้วจัดการแต่ละรอบแยกกัน</span></div></div>
@@ -425,9 +459,17 @@ function MatchControlWorkspace() {
         <Metric label="รอเริ่ม" value={String(matchRaces.filter((item) => item.sailfish_status === "10").length)} sub="รอบ" icon={<Clock3/>}/>
         <Metric label="กำลังแข่งขัน" value={String(matchRaces.filter((item) => item.sailfish_status === "50").length)} sub="รอบ" icon={<Radio/>}/>
       </div>
-      <div className="class-filter">
-        <button className={!classFilter ? "active" : ""} onClick={() => setClassFilter("")}>ทุกประเภท ({matchRaces.length})</button>
-        {classOptions.map(([value, label]) => <button className={classFilter === value ? "active" : ""} key={value} onClick={() => setClassFilter(value)}>{label} ({matchRaces.filter((item) => item.level_cd === value).length})</button>)}
+      <div className="class-filter-bar">
+        <div className="class-filter">
+          <button className={!classFilter ? "active" : ""} onClick={() => setClassFilter("")}>ทุกประเภท ({matchRaces.length})</button>
+          {classOptions.map(([value, label]) => <button className={classFilter === value ? "active" : ""} key={value} onClick={() => setClassFilter(value)}>{label} ({matchRaces.filter((item) => item.level_cd === value).length})</button>)}
+        </div>
+        <div className="public-scope-action">
+          <span><b>อนุญาตให้คนทั่วไปดู</b><small>ขอบเขต: {scopeLabel} · เมื่อจบรอบจะหยุดถ่ายทอดสดอัตโนมัติ</small></span>
+          <button className={scopeEnabled ? "enabled" : ""} disabled={Boolean(busy)} onClick={togglePublicScope}>
+            <ShieldCheck/> {scopeEnabled ? `ปิดหน้าสาธารณะ · ${scopeLabel}` : `เปิดหน้าสาธารณะ · ${scopeLabel}`}
+          </button>
+        </div>
       </div>
       {groups.map(([levelCd, label]) => <section className="panel class-race-group" key={levelCd}>
         <PanelTitle icon={<Users/>} title={label} meta={<span>{visible.filter((item) => (item.level_cd || "") === levelCd).length} รอบ</span>}/>

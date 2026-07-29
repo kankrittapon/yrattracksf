@@ -15,7 +15,11 @@ export interface Race {
   collection_enabled: boolean;
   updated_at: string;
   match?: {name: string} | null;
-  race_class?: {name: string} | null;
+  race_class?: {
+    name: string;
+    public_live_enabled?: boolean;
+    public_history_enabled?: boolean;
+  } | null;
 }
 
 export interface Match {

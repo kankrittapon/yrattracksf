@@ -66,7 +66,7 @@ Extension และ Userscript ไม่ต้องเปิดค้างไ�
 | `/live` | การแข่งขันสด | Viewer/Admin | แผนที่ ตารางลม และตารางทิศของนักกีฬา |
 | `/history` | ผลการแข่งขันย้อนหลัง | Viewer/Admin | เลือกรายการ/ประเภท/รอบ, สั่งนำเข้ารายรอบหรือหลายรอบ และเล่นข้อมูลย้อนหลัง |
 | `/compare` | เปรียบเทียบนักกีฬา | Viewer/Admin | เปรียบเทียบ SOG, COG, มุมเทียบลม และ VMG |
-| `/control` | ควบคุมการเก็บข้อมูล | Admin | เลือกรายการ, Sync หารอบใหม่, Filter ประเภท และ Arm/Start/Stop/Retry รายรอบ |
+| `/control` | ควบคุมการเก็บข้อมูล | Admin | เลือกรายการ, Sync หารอบใหม่, Filter ประเภท, เปิด/ปิด Public ตามตัวกรอง และ Arm/Start/Stop/Retry รายรอบ |
 | `/quality` | ตรวจสอบคุณภาพข้อมูล | Admin | ข้อมูลล่าช้า ข้อมูลขาด reconnect decoder error และอุปกรณ์ซ้ำ |
 | `/settings` | ตั้งค่าระบบ | Admin | เปิดหรือปิด Public ระดับรายการ และดูสถานะประเภท/รอบ |
 
@@ -96,12 +96,13 @@ Extension และ Userscript ไม่ต้องเปิดค้างไ�
 2. กดค้นหารายการจาก SailFish
 3. เลือกรายการแล้วกด Sync รอบการแข่งขัน
 4. Backend บันทึกรอบทุกสถานะลง Supabase โดยยังไม่เริ่มเก็บข้อมูล
-5. รอบสถานะ `10` แสดงเป็น **รอเริ่มการแข่งขัน**
-6. เมื่อเจ้าของสนามกด Start ใน SailFish แล้ว Admin กดตรวจสถานะอีกครั้ง
-7. Admin กดเตรียมเก็บในรอบที่ต้องการ; รอบสถานะ `50` จึงแสดงเป็น **กำลังแข่งขัน** และ Collector เก็บข้อมูล
-8. รอบสถานะ `99` แสดงเป็น **จบการแข่งขันแล้ว**
-9. Admin ไปหน้า History เลือกรอบเดียวหรือหลายรอบที่จบแล้วและสั่งนำเข้า
-10. เมื่อ import สำเร็จ รอบจึงพร้อมแสดงใน History; ระบบไม่นำเข้าอัตโนมัติหลัง Finish
+5. เลือก **ทุกประเภท** หรือเลือกประเภทเรือ แล้วกดปุ่ม Public ที่อยู่ข้างตัวกรอง ปุ่มนี้ควบคุมทุกประเภทที่กำลังแสดงอยู่
+6. รอบสถานะ `10` แสดงเป็น **รอเริ่มการแข่งขัน**
+7. เมื่อเจ้าของสนามกด Start ใน SailFish แล้ว Admin กดตรวจสถานะอีกครั้ง
+8. Admin กดเตรียมเก็บในรอบที่ต้องการ; รอบสถานะ `50` จึงแสดงเป็น **กำลังแข่งขัน** และ Collector เก็บข้อมูล
+9. รอบสถานะ `99` แสดงเป็น **จบการแข่งขันแล้ว** และหยุดแสดงข้อมูล Live ของรอบนั้น โดยหน้าสาธารณะรอรอบถัดไปของประเภทเดียวกัน
+10. Admin ไปหน้า History เลือกรอบเดียวหรือหลายรอบที่จบแล้วและสั่งนำเข้า
+11. เมื่อ import สำเร็จ รอบจึงพร้อมแสดงใน History; ระบบไม่นำเข้าอัตโนมัติหลัง Finish
 
 Collector มีสถานะ:
 
@@ -203,6 +204,7 @@ request body หรือ Authorization header; explicit log-redaction middlewar
 | POST | `/history-imports/{raceCd}/retry` | นำเข้าประวัติทันที |
 | POST | `/history-imports/batch` | นำเข้าหลายรอบตามคิว |
 | POST | `/matches/{matchCd}/visibility` | เปิดหรือปิด Public ทั้งรายการ |
+| POST | `/matches/{matchCd}/public-scope` | เปิดหรือปิด Public ทุกประเภทหรือเฉพาะประเภทตามตัวกรอง |
 | POST | `/race-classes/{levelCd}/visibility` | API เดิมเพื่อ compatibility; UI ใหม่ไม่ใช้ |
 | GET | `/diagnostics/{raceCd}` | ดูข้อมูลวินิจฉัย |
 
@@ -218,7 +220,9 @@ request body หรือ Authorization header; explicit log-redaction middlewar
    - RPC ตารางลมสาธารณะช่วงเวลาจริง/3/5/10 นาที
 4. `supabase/migrations/202607290002_match_control_and_public.sql`
    - การเลือกเก็บรายรอบ, Public ระดับรายการ และกติกาหยุด Live หลัง Finish
-5. `supabase/cleanup.sql`
+5. `supabase/migrations/202607290003_contextual_public_visibility.sql`
+   - เปิด Public ตามประเภทที่เลือก และใช้รอบที่จบเป็นสถานะรอรอบถัดไปโดยไม่ส่งข้อมูล Live
+6. `supabase/cleanup.sql`
    - pg_cron ลบ raw payload ที่หมดอายุ
 
 Supabase ต้องเปิด extension `pg_cron` ก่อนรัน cleanup

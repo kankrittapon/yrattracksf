@@ -36,6 +36,11 @@ class MatchVisibilityRequest(BaseModel):
     is_public: bool
 
 
+class MatchVisibilityScopeRequest(BaseModel):
+    is_public: bool
+    level_cd: str | None = Field(default=None, min_length=1, max_length=128)
+
+
 class HistoryBatchRequest(BaseModel):
     race_cds: list[str] = Field(min_length=1, max_length=100)
 
