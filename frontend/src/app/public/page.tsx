@@ -143,9 +143,10 @@ export default function PublicTelemetryPage() {
   const loadRace = useCallback(async () => {
     if (!raceCd) return setData(null);
     const supabase = createClient();
-    const [{data: result, error}, {data: trackerNumbers}] = await Promise.all([
+    const [{data: result, error}, {data: trackerNumbers}, {data: raceWind}] = await Promise.all([
       supabase.rpc("get_public_race", {p_race_cd: raceCd}),
       supabase.rpc("get_public_tracker_numbers", {p_race_cd: raceCd}),
+      supabase.rpc("get_public_race_wind", {p_race_cd: raceCd}),
     ]);
     if (error) return setMessage(error.message);
     const next = (result || null) as PublicRaceData | null;
@@ -157,6 +158,7 @@ export default function PublicTelemetryPage() {
       ...tracker,
       tracker_no: numberByTeam.get(tracker.team_cd) || null,
     }));
+    if (next && raceWind?.[0]) next.wind = raceWind[0] as PublicRaceData["wind"];
     setData(next);
     setMessage(result ? "" : "รอบนี้ไม่ได้รับอนุญาตให้แสดง");
   }, [raceCd]);
