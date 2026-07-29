@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     sailfish_username: str = ""
     sailfish_password: str = ""
     sailfish_live_token: str = ""
+    sailfish_live_token_refresh_seconds: int = 60
+    sailfish_snapshot_fallback_enabled: bool = True
+    sailfish_snapshot_fallback_seconds: float = 1.0
 
     token_encryption_key: str = ""
     snapshot_interval_seconds: int = 10

@@ -52,6 +52,11 @@ class HistoryBatchRequest(BaseModel):
         return values
 
 
+class TransportMode(StrEnum):
+    WEBSOCKET = "websocket"
+    SNAPSHOT_FALLBACK = "snapshot_fallback"
+
+
 class CollectorStatus(BaseModel):
     race_cd: str
     state: CollectorState
@@ -65,6 +70,24 @@ class CollectorStatus(BaseModel):
     reconnects: int = 0
     sailfish_status: str | None = None
     phase_source: str | None = None
+
+    # Live token lifecycle (planned.md phase 2/4) — never populate with the
+    # token value itself, only its provenance/expiry.
+    token_source: str | None = None
+    token_expires_at: datetime | None = None
+    last_token_refresh_at: datetime | None = None
+
+    # WebSocket transport health, kept separate from `last_error` (which is
+    # reserved for fatal bootstrap failures) and from status-poll errors so
+    # neither channel silently erases the other's diagnostic (planned.md #5).
+    websocket_last_connected_at: datetime | None = None
+    websocket_last_disconnected_at: datetime | None = None
+    websocket_last_error: str | None = None
+    websocket_last_error_at: datetime | None = None
+    transport_mode: TransportMode = TransportMode.WEBSOCKET
+
+    last_status_poll_error: str | None = None
+    last_status_poll_error_at: datetime | None = None
 
 
 class Principal(BaseModel):

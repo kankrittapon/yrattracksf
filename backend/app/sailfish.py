@@ -99,6 +99,23 @@ class SailfishClient:
         body = response.json()
         return body.get("data") or body.get("result") or body
 
+    async def get_live_token(self, race_cd: str) -> str | None:
+        """Best-effort automatic live-token discovery.
+
+        Protocol discovery has not confirmed a dedicated token-issuing
+        endpoint yet (see SAILFISH-LIVE-TOKEN-PROTOCOL-TH.md); this tries the
+        strategies already ruled plausible in planned.md, cheapest first.
+        """
+        race = await self.get_race(race_cd)
+        token = self.find_live_token(race)
+        if token:
+            return token
+        try:
+            admin_race = await self.get_admin_race(race_cd)
+        except httpx.HTTPStatusError:
+            return None
+        return self.find_live_token(admin_race)
+
     async def get_admin_race(self, race_cd: str) -> dict[str, Any]:
         """Read the authoritative race status observed on the SailFish admin page."""
         if not self.access_token:
@@ -181,9 +198,6 @@ class SailfishClient:
                     return found
         return None
 
-    def websocket_url(self, race: dict[str, Any]) -> str:
-        token = self.settings.sailfish_live_token or self.find_live_token(race)
-        if not token:
-            raise RuntimeError("Live WebSocket token not found; set SAILFISH_LIVE_TOKEN or capture getRace token field")
+    def websocket_url(self, token: str) -> str:
         base = self.settings.sailfish_base_url.replace("https://", "wss://").replace("http://", "ws://")
         return f"{base.rstrip('/')}/sailfish-ntwss?token={token}"

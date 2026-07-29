@@ -32,3 +32,49 @@ async def test_discover_races_reads_every_page() -> None:
     assert len(rows) == 55
     assert requested_pages == [1, 2]
     assert rows[-1]["matchCd"] == "match-54"
+
+
+async def test_get_live_token_finds_token_embedded_in_get_race() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "getRace" in str(request.url):
+            return httpx.Response(200, json={"data": {"raceCd": "race-1", "liveToken": "secret-123"}})
+        return httpx.Response(200, json={"data": {}})
+
+    client = SailfishClient(Settings(_env_file=None))
+    await client.http.aclose()
+    client.http = httpx.AsyncClient(
+        base_url="https://www.saill.cn",
+        transport=httpx.MockTransport(handler),
+    )
+
+    token = await client.get_live_token("race-1")
+    await client.close()
+
+    assert token == "secret-123"
+
+
+async def test_get_live_token_returns_none_when_not_found() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": {"raceCd": "race-1"}})
+
+    client = SailfishClient(Settings(_env_file=None))
+    await client.http.aclose()
+    client.http = httpx.AsyncClient(
+        base_url="https://www.saill.cn",
+        transport=httpx.MockTransport(handler),
+    )
+    client.access_token = "test-token"
+
+    token = await client.get_live_token("race-1")
+    await client.close()
+
+    assert token is None
+
+
+async def test_websocket_url_embeds_token() -> None:
+    client = SailfishClient(Settings(_env_file=None))
+
+    url = client.websocket_url("secret-123")
+    await client.close()
+
+    assert url == "wss://www.saill.cn/sailfish-ntwss?token=secret-123"

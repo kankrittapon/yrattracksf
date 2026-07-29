@@ -436,6 +436,7 @@ async def diagnostics(race_cd: str, principal: Principal = Depends(require_admin
     return {
         "race_cd": race_cd,
         "collector": collector.status.model_dump(mode="json") if collector else None,
+        "live_token": app.state.collectors.token_provider.diagnostics(),
         "raw_retention_days": settings.raw_retention_days,
         "wind_freshness_seconds": settings.wind_freshness_seconds,
         "live_binary_decoder": "capture-only-until-schema-confirmed",
