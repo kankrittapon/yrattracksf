@@ -25,7 +25,7 @@ from .schemas import (
     RaceClassVisibilityRequest,
     RaceSyncRequest,
 )
-from .security import control_rate_limit, require_admin, require_tailnet_source
+from .security import control_rate_limit, public_rate_limit, require_admin, require_tailnet_source
 
 settings = get_settings()
 logging.basicConfig(level=settings.log_level)
@@ -283,7 +283,7 @@ async def archive_athlete_history(
     return [dict(row) for row in rows]
 
 
-@app.get("/public/archive/athlete-history", dependencies=[Depends(control_rate_limit)])
+@app.get("/public/archive/athlete-history", dependencies=[Depends(public_rate_limit)])
 async def public_archive_athlete_history(
     race_cd: str,
     team_cd: str,
@@ -302,7 +302,7 @@ async def public_archive_athlete_history(
     return [dict(row) for row in rows]
 
 
-@app.get("/history-imports")
+@app.get("/history-imports", dependencies=[Depends(control_rate_limit)])
 async def list_history_imports(principal: Principal = Depends(require_admin)):
     return {
         "items": await app.state.repository.select(
@@ -311,7 +311,7 @@ async def list_history_imports(principal: Principal = Depends(require_admin)):
     }
 
 
-@app.get("/history-imports/{race_cd}")
+@app.get("/history-imports/{race_cd}", dependencies=[Depends(control_rate_limit)])
 async def get_history_import(race_cd: str, principal: Principal = Depends(require_admin)):
     rows = await app.state.repository.select(
         "history_imports", filters={"race_cd": f"eq.{race_cd}"}, limit=1
@@ -476,12 +476,20 @@ async def set_race_class_visibility(
     return {"level_cd": level_cd, **body.model_dump()}
 
 
-@app.get("/collectors", response_model=list[CollectorStatus])
+@app.get(
+    "/collectors",
+    response_model=list[CollectorStatus],
+    dependencies=[Depends(control_rate_limit)],
+)
 async def list_collectors(principal: Principal = Depends(require_admin)):
     return [collector.status for collector in app.state.collectors.collectors.values()]
 
 
-@app.get("/collectors/{race_cd}", response_model=CollectorStatus)
+@app.get(
+    "/collectors/{race_cd}",
+    response_model=CollectorStatus,
+    dependencies=[Depends(control_rate_limit)],
+)
 async def get_collector(race_cd: str, principal: Principal = Depends(require_admin)):
     collector = app.state.collectors.collectors.get(race_cd)
     if not collector:
@@ -544,7 +552,7 @@ async def retry_collector(race_cd: str, body: ArmRequest, principal: Principal =
     return await collector.arm()
 
 
-@app.get("/diagnostics/{race_cd}")
+@app.get("/diagnostics/{race_cd}", dependencies=[Depends(control_rate_limit)])
 async def diagnostics(race_cd: str, principal: Principal = Depends(require_admin)):
     collector = app.state.collectors.collectors.get(race_cd)
     return {

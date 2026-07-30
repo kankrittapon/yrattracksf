@@ -117,9 +117,18 @@ class SimpleRateLimiter:
         now = monotonic()
         recent = [item for item in self._requests.get(key, []) if now - item < self.window_seconds]
         if len(recent) >= self.limit:
-            raise HTTPException(status_code=429, detail="Too many control requests")
+            raise HTTPException(status_code=429, detail="Too many requests")
         recent.append(now)
         self._requests[key] = recent
+        if len(self._requests) > 10000:
+            self._requests = {
+                host: items
+                for host, items in self._requests.items()
+                if items and now - items[-1] < self.window_seconds
+            }
 
 
 control_rate_limit = SimpleRateLimiter()
+# Stricter and unauthenticated: protects the archive Postgres pool
+# (max_size=4) from being exhausted by anonymous public traffic.
+public_rate_limit = SimpleRateLimiter(limit=20, window_seconds=60)
