@@ -372,7 +372,7 @@ function MatchControlWorkspace() {
     });
     return [...map.entries()];
   }, [data.matches, data.races, discovered]);
-  const matchRaces = data.races.filter((item) => item.match_cd === matchCd);
+  const matchRaces = data.races.filter((item) => item.match_cd === matchCd && item.sailfish_status !== "99");
   const classOptions = [...new Map(matchRaces.map((item) => [item.level_cd || "", classNameOf(item)])).entries()];
   const visible = matchRaces.filter((item) => !classFilter || item.level_cd === classFilter);
   const groups = [...new Map(visible.map((item) => [item.level_cd || "", classNameOf(item)])).entries()];
@@ -405,7 +405,7 @@ function MatchControlWorkspace() {
       const body = await adminRequest("/races/sync", {method: "POST", body: JSON.stringify({match_cd: matchCd})});
       const incoming = (body.items || []) as Array<{raceCd: string}>;
       setNewRaces(new Set(incoming.filter((item) => !before.has(item.raceCd)).map((item) => item.raceCd)));
-      setNotice(`อัปเดตแล้ว ${incoming.length} รอบ · รอเริ่ม ${body.waiting?.length || 0} · กำลังแข่ง ${body.active?.length || 0} · จบแล้ว ${body.finished?.length || 0}`);
+      setNotice(`อัปเดตแล้ว ${incoming.length} รอบ · รอเริ่ม ${body.waiting?.length || 0} · กำลังแข่ง ${body.active?.length || 0} · จบแล้ว ${body.finished?.length || 0} · เตรียมเก็บข้อมูลอัตโนมัติแล้ว ${body.armed?.length || 0} รอบ`);
       await reload();
     } catch (error) {
       setNotice(`Sync ไม่สำเร็จ — ${mapErrorMessage(error)}`);
@@ -506,8 +506,7 @@ function MatchControlWorkspace() {
             <div><b>{race.rounds || race.name || "ไม่ระบุรอบ"}</b><span>{raceStatusLabel[race.sailfish_status || ""] || "ไม่ทราบสถานะ"} · {bangkokDateTime(race.start_at)}</span></div>
             <div className="round-badges">{newRaces.has(race.race_cd) && <i className="new-badge">รอบใหม่</i>}<i className={`race-status status-${race.sailfish_status}`}>{collectorState[status?.state || "idle"]}</i></div>
             <div className="round-actions">
-              {race.sailfish_status === "99" ? <span className="finished-copy">ไปหน้า “ผลย้อนหลัง” เพื่อนำเข้าข้อมูล</span>
-                : !isAdmin ? <span className="finished-copy">ต้องเป็นผู้ดูแลระบบจึงจะสั่งงานได้</span>
+              {!isAdmin ? <span className="finished-copy">ต้องเป็นผู้ดูแลระบบจึงจะสั่งงานได้</span>
                 : <>
                   {!running && <button disabled={busy === race.race_cd} onClick={() => roundAction(race, "arm")}><Radio/> เตรียมเก็บข้อมูล</button>}
                   {running && <>
@@ -614,7 +613,7 @@ function HistoryWorkspace() {
       });
       setClassFilter("");
       setSelected(new Set());
-      setNotice(`โหลดประเภทและรอบแล้ว ${body.items?.length || 0} รอบ · จบแล้ว ${body.finished?.length || 0} รอบ`);
+      setNotice(`โหลดประเภทและรอบแล้ว ${body.items?.length || 0} รอบ · จบแล้ว ${body.finished?.length || 0} รอบ · เตรียมเก็บข้อมูลอัตโนมัติแล้ว ${body.armed?.length || 0} รอบ`);
       await reload();
     } catch (error) {
       setNotice(`โหลดประเภทและรอบไม่สำเร็จ — ${mapErrorMessage(error)}`);

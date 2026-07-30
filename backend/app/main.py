@@ -24,7 +24,7 @@ from .schemas import (
     RaceClassVisibilityRequest,
     RaceSyncRequest,
 )
-from .security import control_rate_limit, require_admin
+from .security import control_rate_limit, require_admin, require_tailnet_source
 
 settings = get_settings()
 logging.basicConfig(level=settings.log_level)
@@ -115,6 +115,17 @@ async def _persist_races(repository: Repository, races: list[dict[str, Any]]) ->
     await repository.upsert("races", normalized_races, "race_cd")
 
 
+async def _arm_race(race_cd: str, actor_id: str, reason: str) -> CollectorStatus:
+    collector = app.state.collectors.get_or_create(race_cd)
+    await app.state.repository.update(
+        "races",
+        {"collection_enabled": True, "tracked_at": datetime.now(UTC).isoformat()},
+        {"race_cd": race_cd},
+    )
+    await app.state.repository.audit(actor_id, "collector.arm", race_cd, reason)
+    return await collector.arm()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     repository = Repository(settings)
@@ -125,7 +136,11 @@ async def lifespan(app: FastAPI):
     await app.state.history.start()
     app.state.tracker_monitor = TrackerMonitor(settings, sailfish, repository)
     await app.state.tracker_monitor.start()
-    app.state.collectors = CollectorManager(settings, sailfish, repository)
+
+    async def _on_race_finished(race_cd: str, race: dict[str, Any]) -> None:
+        await app.state.history.schedule_after_finish(race_cd, race)
+
+    app.state.collectors = CollectorManager(settings, sailfish, repository, on_finished=_on_race_finished)
     active_races = await repository.select(
         "races",
         columns="race_cd",
@@ -182,12 +197,18 @@ async def sync_races(body: RaceSyncRequest, principal: Principal = Depends(requi
     waiting = [race for race in merged if str(race.get("status") or "") == "10"]
     finished = [race for race in merged if str(race.get("status") or "") == "99"]
     await _persist_races(app.state.repository, merged)
+    armed_codes = [str(race["raceCd"]) for race in (*active, *waiting) if race.get("raceCd")]
+    if armed_codes:
+        await asyncio.gather(*(
+            _arm_race(race_cd, principal.user_id, "auto_arm_on_sync") for race_cd in armed_codes
+        ))
     await app.state.repository.audit(principal.user_id, "races.sync", None, body.match_cd)
     return {
         "items": merged,
         "active": active,
         "waiting": waiting,
         "finished": finished,
+        "armed": armed_codes,
         "collectors": [],
         "history_imports": [],
     }
@@ -380,22 +401,19 @@ async def get_collector(race_cd: str, principal: Principal = Depends(require_adm
     return collector.status
 
 
-@app.post("/collectors/{race_cd}/arm", response_model=CollectorStatus, dependencies=[Depends(control_rate_limit)])
+@app.post(
+    "/collectors/{race_cd}/arm",
+    response_model=CollectorStatus,
+    dependencies=[Depends(control_rate_limit), Depends(require_tailnet_source)],
+)
 async def arm_collector(race_cd: str, body: ArmRequest, principal: Principal = Depends(require_admin)):
-    collector = app.state.collectors.get_or_create(race_cd)
-    await app.state.repository.update(
-        "races",
-        {"collection_enabled": True, "tracked_at": datetime.now(UTC).isoformat()},
-        {"race_cd": race_cd},
-    )
-    await app.state.repository.audit(principal.user_id, "collector.arm", race_cd, body.reason)
-    return await collector.arm()
+    return await _arm_race(race_cd, principal.user_id, body.reason)
 
 
 @app.post(
     "/collectors/{race_cd}/start-override",
     response_model=CollectorStatus,
-    dependencies=[Depends(control_rate_limit)],
+    dependencies=[Depends(control_rate_limit), Depends(require_tailnet_source)],
 )
 async def start_override(race_cd: str, body: OverrideRequest, principal: Principal = Depends(require_admin)):
     collector = app.state.collectors.collectors.get(race_cd)
@@ -405,7 +423,11 @@ async def start_override(race_cd: str, body: OverrideRequest, principal: Princip
     return await collector.start_override()
 
 
-@app.post("/collectors/{race_cd}/stop", response_model=CollectorStatus, dependencies=[Depends(control_rate_limit)])
+@app.post(
+    "/collectors/{race_cd}/stop",
+    response_model=CollectorStatus,
+    dependencies=[Depends(control_rate_limit), Depends(require_tailnet_source)],
+)
 async def stop_collector(race_cd: str, body: OverrideRequest, principal: Principal = Depends(require_admin)):
     collector = app.state.collectors.collectors.get(race_cd)
     if not collector:
@@ -417,7 +439,11 @@ async def stop_collector(race_cd: str, body: OverrideRequest, principal: Princip
     return await collector.stop()
 
 
-@app.post("/collectors/{race_cd}/retry", response_model=CollectorStatus, dependencies=[Depends(control_rate_limit)])
+@app.post(
+    "/collectors/{race_cd}/retry",
+    response_model=CollectorStatus,
+    dependencies=[Depends(control_rate_limit), Depends(require_tailnet_source)],
+)
 async def retry_collector(race_cd: str, body: ArmRequest, principal: Principal = Depends(require_admin)):
     collector = app.state.collectors.get_or_create(race_cd)
     await collector.stop()

@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     token_encryption_key: str = ""
     snapshot_interval_seconds: int = 10
     race_status_poll_seconds: float = 2.0
-    history_import_delay_minutes: int = 90
+    history_import_delay_minutes: int = 20
     history_import_retry_minutes: int = 15
     history_scheduler_interval_seconds: int = 30
     tracker_poll_seconds: float = 5.0

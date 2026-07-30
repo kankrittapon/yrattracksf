@@ -1,3 +1,4 @@
+import ipaddress
 from functools import lru_cache
 from time import monotonic
 
@@ -8,6 +9,8 @@ from jwt import PyJWKClient
 
 from .config import Settings, get_settings
 from .schemas import Principal
+
+TAILSCALE_CGNAT = ipaddress.ip_network("100.64.0.0/10")
 
 
 @lru_cache(maxsize=4)
@@ -71,6 +74,36 @@ async def require_admin(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
     principal.role = "admin"
     return principal
+
+
+def _peer_address(request: Request) -> str | None:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else None
+
+
+async def require_tailnet_source(request: Request) -> None:
+    """Restrict collector start/stop actions to requests arriving over the Tailscale network.
+
+    Sync/discover/history-import stay reachable from the public internet (see
+    planned scope), but arming or overriding a live collector remains
+    Tailscale-only since auto-arm-on-sync already covers normal operation
+    server-side. Checked via the connecting address falling in Tailscale's
+    CGNAT range (100.64.0.0/10) - this needs live verification once Tailscale
+    Funnel is enabled, since the exact header/address seen here depends on how
+    Tailscale proxies the connection to the local process.
+    """
+    address = _peer_address(request)
+    try:
+        in_tailnet = address is not None and ipaddress.ip_address(address) in TAILSCALE_CGNAT
+    except ValueError:
+        in_tailnet = False
+    if not in_tailnet:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This action requires the Tailscale-connected admin console",
+        )
 
 
 class SimpleRateLimiter:
