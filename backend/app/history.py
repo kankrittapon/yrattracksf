@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .config import Settings
-from .decoder import calculate_vmc, course_to_wind, normalize_team, normalize_wind, resolve_finish_target
+from .decoder import course_to_wind, normalize_team, normalize_wind
 from .repository import Repository
 from .sailfish import SailfishClient
 
@@ -209,10 +209,6 @@ class HistoryImportManager:
             (key for key, item in wind_meta.items() if item.get("rollType") == "main"),
             next(iter(wind_meta), None),
         )
-        # The finish/start line doesn't move mid-race, so the snapshot taken
-        # at end_ms is a reliable stand-in for the whole race.
-        finish_target = resolve_finish_target(snapshot)
-
         span_minutes = 6
         span_ms = span_minutes * 60_000
         chunk_starts = list(range(start_ms, end_ms + 1, span_ms))
@@ -245,7 +241,6 @@ class HistoryImportManager:
                         row = normalize_team({**team_meta[key], "raceCd": race_cd, "runtime": runtime})
                         if row["captured_at_ms"]:
                             row["phase"] = "recording"
-                            row.update(calculate_vmc(row, finish_target))
                             athlete_rows.append(row)
                     elif key in wind_meta:
                         row = normalize_wind({**wind_meta[key], "raceCd": race_cd, "runtime": runtime})

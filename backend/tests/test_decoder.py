@@ -3,14 +3,10 @@ import json
 from lzstring import LZString
 
 from app.decoder import (
-    bearing_degree,
-    build_mark_positions,
-    calculate_vmc,
     course_to_wind,
     decode_live_frame,
     decode_snapshot_result,
     normalize_team,
-    resolve_finish_target,
     wrap_to_180,
 )
 
@@ -26,104 +22,6 @@ def test_course_to_wind() -> None:
     assert result["relative_signed_degree"] == 45
     assert result["relative_angle_degree"] == 45
     assert round(result["upwind_vmg_knots"], 5) == 2.82843
-
-
-def test_bearing_degree_cardinal_directions() -> None:
-    assert round(bearing_degree(0, 0, 1, 0), 3) == 0.0
-    assert round(bearing_degree(0, 0, 0, 1), 3) == 90.0
-    assert round(bearing_degree(0, 0, -1, 0), 3) == 180.0
-    assert round(bearing_degree(0, 0, 0, -1), 3) == 270.0
-
-
-def test_build_mark_positions_aliases_finish_to_start_line() -> None:
-    snapshot = {
-        "navigationMark": [
-            {"position": "startA", "navigationMarkName": "startA"},
-            {"position": "startB", "navigationMarkName": "startB"},
-            {"position": "finishA", "navigationMarkName": "finishA"},
-            {"position": "finishB", "navigationMarkName": "finishB"},
-            {"position": "point", "navigationMarkName": "1"},
-        ],
-        "markpositions": [
-            {"lat": 12.0, "lng": 100.0},
-            {"lat": 12.1, "lng": 100.1},
-            {"lat": 12.5, "lng": 100.5},
-        ],
-    }
-    positions = build_mark_positions(snapshot)
-    assert positions["startA"] == (12.0, 100.0)
-    assert positions["1"] == (12.5, 100.5)
-    assert positions["finishA"] == positions["startA"]
-    assert positions["finishB"] == positions["startB"]
-
-
-def test_build_mark_positions_maps_partial_marks_when_later_marks_unset() -> None:
-    # Real-world case: navigationMark lists every possible course mark, but
-    # markpositions only grows entries for marks actually set so far -
-    # course marks past the ones sailed this race can be missing entirely.
-    snapshot = {
-        "navigationMark": [
-            {"position": "startA", "navigationMarkName": "startA"},
-            {"position": "startB", "navigationMarkName": "startB"},
-            {"position": "finishA", "navigationMarkName": "finishA"},
-            {"position": "finishB", "navigationMarkName": "finishB"},
-            {"position": "point", "navigationMarkName": "1"},
-            {"position": "point", "navigationMarkName": "2"},
-            {"position": "point", "navigationMarkName": "3p"},
-            {"position": "point", "navigationMarkName": "4p"},
-            {"position": "point", "navigationMarkName": "4s"},
-        ],
-        "markpositions": [
-            {"lat": 12.0, "lng": 100.0},
-            {"lat": 12.1, "lng": 100.1},
-            {"lat": 12.2, "lng": 100.2},
-        ],
-    }
-    positions = build_mark_positions(snapshot)
-    assert positions["startA"] == (12.0, 100.0)
-    assert positions["startB"] == (12.1, 100.1)
-    assert positions["1"] == (12.2, 100.2)
-    assert "2" not in positions
-    assert "3p" not in positions
-    assert positions["finishA"] == positions["startA"]
-    assert positions["finishB"] == positions["startB"]
-
-
-def test_resolve_finish_target_averages_finish_marks() -> None:
-    snapshot = {
-        "navigationMark": [
-            {"position": "startA", "navigationMarkName": "startA"},
-            {"position": "startB", "navigationMarkName": "startB"},
-            {"position": "finishA", "navigationMarkName": "finishA"},
-            {"position": "finishB", "navigationMarkName": "finishB"},
-        ],
-        "markpositions": [
-            {"lat": 10.0, "lng": 20.0},
-            {"lat": 12.0, "lng": 22.0},
-        ],
-    }
-    assert resolve_finish_target(snapshot) == (11.0, 21.0)
-
-
-def test_resolve_finish_target_none_when_unresolvable() -> None:
-    assert resolve_finish_target({"navigationMark": [], "markpositions": []}) is None
-
-
-def test_calculate_vmc_matches_sog_when_heading_straight_at_target() -> None:
-    row = {"sog_knots": 5.0, "cog_degree": 0.0, "latitude": 0.0, "longitude": 0.0}
-    result = calculate_vmc(row, (1.0, 0.0))
-    assert round(result["vmc_knots"], 5) == 5.0
-
-
-def test_calculate_vmc_negative_when_heading_away_from_target() -> None:
-    row = {"sog_knots": 5.0, "cog_degree": 180.0, "latitude": 0.0, "longitude": 0.0}
-    result = calculate_vmc(row, (1.0, 0.0))
-    assert round(result["vmc_knots"], 5) == -5.0
-
-
-def test_calculate_vmc_none_when_target_unresolved() -> None:
-    row = {"sog_knots": 5.0, "cog_degree": 0.0, "latitude": 0.0, "longitude": 0.0}
-    assert calculate_vmc(row, None) == {"vmc_knots": None}
 
 
 def test_normalize_team_uses_team_identity() -> None:
@@ -148,6 +46,15 @@ def test_normalize_team_uses_team_identity() -> None:
     assert result["upwind_vmg_knots"] is None
     assert result["wind_reading_captured_at_ms"] is None
     assert result["vmc_knots"] is None
+
+
+def test_normalize_team_reads_vmc_from_runtime_index_27() -> None:
+    # This is the field the SailFish site itself displays under "VMC" on its
+    # Ranking Board - not a value we compute.
+    runtime = [""] * 51
+    runtime[27] = "3.3436"
+    result = normalize_team({"raceCd": "race", "teamCd": "team-a", "runtime": runtime})
+    assert result["vmc_knots"] == 3.3436
 
 
 def test_live_frame_types() -> None:
