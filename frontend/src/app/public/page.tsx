@@ -19,6 +19,7 @@ interface CatalogRace {
   public_mode: "live" | "history";
   start_at: string | null;
   end_at: string | null;
+  archived_at: string | null;
 }
 
 interface PublicAthlete {
@@ -48,6 +49,7 @@ interface PublicRaceData {
     status: string;
     start_at: string | null;
     end_at: string | null;
+    archived_at: string | null;
   };
   tracker_status: {
     track_open: boolean;
@@ -182,6 +184,20 @@ export default function PublicTelemetryPage() {
       setHistory([]);
       return;
     }
+    if (data?.race.archived_at) {
+      const api = process.env.NEXT_PUBLIC_CONTROL_API_URL;
+      if (!api) return setMessage("ยังไม่ได้ตั้งค่าที่อยู่ระบบควบคุม");
+      try {
+        const response = await fetch(
+          `${api.replace(/\/$/, "")}/public/archive/athlete-history?race_cd=${raceCd}&team_cd=${teamCd}&sample_seconds=5`
+        );
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        setHistory((await response.json()) as PublicAthlete[]);
+      } catch (error) {
+        setMessage(mapErrorMessage(error));
+      }
+      return;
+    }
     const supabase = createClient();
     const {data: rows, error} = await supabase.rpc("get_public_athlete_history", {
       p_race_cd: raceCd,
@@ -192,7 +208,7 @@ export default function PublicTelemetryPage() {
     });
     if (error) return setMessage(mapErrorMessage(error));
     setHistory((rows || []) as PublicAthlete[]);
-  }, [data?.race.status, mode, raceCd, teamCd]);
+  }, [data?.race.archived_at, data?.race.status, mode, raceCd, teamCd]);
 
   useEffect(() => { void loadAthleteSeries(); }, [loadAthleteSeries]);
   useVisibleInterval(() => {

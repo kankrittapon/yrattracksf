@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Private SailFish race collector and Tailscale control API"
 requires-python = ">=3.11"
 dependencies = [
+  "asyncpg>=0.29",
   "cryptography>=43.0",
   "fastapi>=0.115",
   "httpx>=0.27",

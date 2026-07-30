@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from .archive import ArchiveManager
 from .collector import CollectorManager
 from .config import get_settings
 from .history import HistoryImportManager
@@ -136,6 +137,8 @@ async def lifespan(app: FastAPI):
     await app.state.history.start()
     app.state.tracker_monitor = TrackerMonitor(settings, sailfish, repository)
     await app.state.tracker_monitor.start()
+    app.state.archive = ArchiveManager(settings, repository)
+    await app.state.archive.start()
 
     async def _on_race_finished(race_cd: str, race: dict[str, Any]) -> None:
         await app.state.history.schedule_after_finish(race_cd, race)
@@ -150,6 +153,7 @@ async def lifespan(app: FastAPI):
         await app.state.collectors.get_or_create(str(race["race_cd"])).arm()
     yield
     await app.state.collectors.shutdown()
+    await app.state.archive.shutdown()
     await app.state.tracker_monitor.shutdown()
     await app.state.history.shutdown()
     await sailfish.close()
@@ -212,6 +216,90 @@ async def sync_races(body: RaceSyncRequest, principal: Principal = Depends(requi
         "collectors": [],
         "history_imports": [],
     }
+
+
+ARCHIVE_ATHLETE_QUERY = (
+    "select id, race_cd, team_cd, team_name, sail_no, device_cd, nationality, "
+    "captured_at_ms, received_at_ms, sog_knots, cog_degree, latitude, longitude, "
+    "relative_signed_degree, relative_angle_degree, upwind_vmg_knots, vmc_knots, "
+    "wind_reading_captured_at_ms, phase, created_at "
+    "from athlete_readings where race_cd = $1 and team_cd = $2 "
+    "order by captured_at_ms limit 10000"
+)
+
+PUBLIC_ARCHIVE_ATHLETE_QUERY = (
+    "select a.team_cd, a.team_name, a.sail_no, a.nationality, a.captured_at_ms, "
+    "a.sog_knots, a.cog_degree, w.speed_knots as wind_speed_knots, "
+    "w.direction_degree as wind_direction_degree, a.relative_signed_degree, "
+    "a.relative_angle_degree, a.upwind_vmg_knots, a.vmc_knots "
+    "from athlete_readings a "
+    "left join wind_readings w "
+    "  on w.race_cd = a.race_cd and w.captured_at_ms = a.wind_reading_captured_at_ms "
+    "where a.race_cd = $1 and a.team_cd = $2 "
+    "  and ($3::bigint is null or a.captured_at_ms >= $3) "
+    "  and ($4::bigint is null or a.captured_at_ms <= $4) "
+    "  and ($5::int <= 1 or mod((a.captured_at_ms / 1000)::bigint, least(greatest($5::int, 1), 60)) = 0) "
+    "order by a.captured_at_ms limit 10000"
+)
+
+
+async def _public_archived_race(race_cd: str) -> dict[str, Any] | None:
+    """Mirrors get_public_athlete_history's visibility check for archived races."""
+    races = await app.state.repository.select(
+        "races",
+        columns="race_cd,match_cd,level_cd,sailfish_status,archived_at",
+        filters={"race_cd": f"eq.{race_cd}"},
+        limit=1,
+    )
+    if not races:
+        return None
+    race = races[0]
+    if str(race.get("sailfish_status") or "") != "99" or not race.get("archived_at"):
+        return None
+    matches = await app.state.repository.select(
+        "matches", columns="is_public", filters={"match_cd": f"eq.{race['match_cd']}"}, limit=1
+    )
+    if not matches or not matches[0].get("is_public"):
+        return None
+    classes = await app.state.repository.select(
+        "race_classes",
+        columns="public_history_enabled",
+        filters={"level_cd": f"eq.{race['level_cd']}"},
+        limit=1,
+    )
+    if not classes or not classes[0].get("public_history_enabled"):
+        return None
+    return race
+
+
+@app.get("/archive/athlete-history", dependencies=[Depends(control_rate_limit)])
+async def archive_athlete_history(
+    race_cd: str, team_cd: str, principal: Principal = Depends(require_admin)
+):
+    if not app.state.archive.pool:
+        raise HTTPException(status_code=503, detail="Archive database unavailable")
+    async with app.state.archive.pool.acquire() as connection:
+        rows = await connection.fetch(ARCHIVE_ATHLETE_QUERY, race_cd, team_cd)
+    return [dict(row) for row in rows]
+
+
+@app.get("/public/archive/athlete-history", dependencies=[Depends(control_rate_limit)])
+async def public_archive_athlete_history(
+    race_cd: str,
+    team_cd: str,
+    from_ms: int | None = None,
+    to_ms: int | None = None,
+    sample_seconds: int = 1,
+):
+    if not await _public_archived_race(race_cd):
+        raise HTTPException(status_code=404, detail="Race not available")
+    if not app.state.archive.pool:
+        raise HTTPException(status_code=503, detail="Archive database unavailable")
+    async with app.state.archive.pool.acquire() as connection:
+        rows = await connection.fetch(
+            PUBLIC_ARCHIVE_ATHLETE_QUERY, race_cd, team_cd, from_ms, to_ms, sample_seconds
+        )
+    return [dict(row) for row in rows]
 
 
 @app.get("/history-imports")

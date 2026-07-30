@@ -1,4 +1,4 @@
-from app.main import _arm_race, app, sync_races
+from app.main import _arm_race, _public_archived_race, app, sync_races
 from app.schemas import Principal, RaceSyncRequest
 
 
@@ -20,12 +20,13 @@ class FakeCollectorManager:
 
 
 class FakeRepository:
-    def __init__(self) -> None:
+    def __init__(self, tables: dict[str, list[dict]] | None = None) -> None:
         self.updates: list[tuple[str, dict, dict]] = []
         self.audits: list[tuple[str, str, str | None, str | None]] = []
+        self.tables = tables or {}
 
     async def select(self, table, *, columns="*", filters=None, order=None, limit=None):
-        return []
+        return self.tables.get(table, [])
 
     async def upsert(self, table, rows, on_conflict) -> None:
         pass
@@ -78,3 +79,64 @@ async def test_sync_races_auto_arms_waiting_and_active_but_not_finished() -> Non
     assert set(body["armed"]) == {"waiting-race", "active-race"}
     assert set(app.state.collectors.collectors) == {"waiting-race", "active-race"}
     assert all(c.armed for c in app.state.collectors.collectors.values())
+
+
+def _archived_race_row(**overrides):
+    row = {
+        "race_cd": "race-1",
+        "match_cd": "match-1",
+        "level_cd": "level-1",
+        "sailfish_status": "99",
+        "archived_at": "2026-01-01T00:00:00+00:00",
+    }
+    row.update(overrides)
+    return row
+
+
+async def test_public_archived_race_allows_when_fully_public_and_archived() -> None:
+    app.state.repository = FakeRepository({
+        "races": [_archived_race_row()],
+        "matches": [{"is_public": True}],
+        "race_classes": [{"public_history_enabled": True}],
+    })
+
+    result = await _public_archived_race("race-1")
+
+    assert result is not None
+    assert result["race_cd"] == "race-1"
+
+
+async def test_public_archived_race_none_when_not_yet_archived() -> None:
+    app.state.repository = FakeRepository({
+        "races": [_archived_race_row(archived_at=None)],
+        "matches": [{"is_public": True}],
+        "race_classes": [{"public_history_enabled": True}],
+    })
+
+    assert await _public_archived_race("race-1") is None
+
+
+async def test_public_archived_race_none_when_match_not_public() -> None:
+    app.state.repository = FakeRepository({
+        "races": [_archived_race_row()],
+        "matches": [{"is_public": False}],
+        "race_classes": [{"public_history_enabled": True}],
+    })
+
+    assert await _public_archived_race("race-1") is None
+
+
+async def test_public_archived_race_none_when_history_not_enabled() -> None:
+    app.state.repository = FakeRepository({
+        "races": [_archived_race_row()],
+        "matches": [{"is_public": True}],
+        "race_classes": [{"public_history_enabled": False}],
+    })
+
+    assert await _public_archived_race("race-1") is None
+
+
+async def test_public_archived_race_none_when_race_missing() -> None:
+    app.state.repository = FakeRepository({"races": []})
+
+    assert await _public_archived_race("race-1") is None

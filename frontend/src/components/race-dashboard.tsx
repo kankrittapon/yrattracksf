@@ -1024,6 +1024,14 @@ function History({race, teams, role}: {race: Race; teams: Team[]; role: string})
   }, [selectedTeam, teams]);
   useEffect(() => {
     if (!selectedTeam) return;
+    if (race.archived_at) {
+      void adminRequest(`/archive/athlete-history?race_cd=${race.race_cd}&team_cd=${selectedTeam}`)
+        .then((data: Array<AthleteState & {created_at: string}>) => {
+          setReadings((data || []).map((row) => ({...row, updated_at: row.created_at})));
+          setCursor(0);
+        });
+      return;
+    }
     const supabase = createClient();
     void supabase.from("athlete_readings")
       .select("race_cd,team_cd,captured_at_ms,sog_knots,cog_degree,latitude,longitude,relative_signed_degree,relative_angle_degree,upwind_vmg_knots,vmc_knots,created_at")
@@ -1035,7 +1043,7 @@ function History({race, teams, role}: {race: Race; teams: Team[]; role: string})
         setReadings(((data || []) as unknown as AthleteState[]).map((row) => ({...row, updated_at: (row as unknown as {created_at: string}).created_at})));
         setCursor(0);
       });
-  }, [race.race_cd, selectedTeam]);
+  }, [race.race_cd, race.archived_at, selectedTeam]);
   useEffect(() => {
     if (!playing || readings.length < 2) return;
     const timer = window.setInterval(() => {
@@ -1050,12 +1058,20 @@ function History({race, teams, role}: {race: Race; teams: Team[]; role: string})
   async function exportCsv() {
     if (role !== "admin") return;
     const supabase = createClient();
-    const {data} = await supabase.from("athlete_readings")
-      .select("team_cd,captured_at_ms,sog_knots,cog_degree,latitude,longitude,relative_signed_degree,relative_angle_degree,upwind_vmg_knots,vmc_knots")
-      .eq("race_cd", race.race_cd)
-      .order("captured_at_ms")
-      .limit(100000);
-    const rows = data || [];
+    let rows: Record<string, unknown>[];
+    if (race.archived_at) {
+      const perTeam = await Promise.all(teams.map((team) =>
+        adminRequest(`/archive/athlete-history?race_cd=${race.race_cd}&team_cd=${team.team_cd}`)
+          .catch(() => []) as Promise<Record<string, unknown>[]>));
+      rows = perTeam.flat();
+    } else {
+      const {data} = await supabase.from("athlete_readings")
+        .select("team_cd,captured_at_ms,sog_knots,cog_degree,latitude,longitude,relative_signed_degree,relative_angle_degree,upwind_vmg_knots,vmc_knots")
+        .eq("race_cd", race.race_cd)
+        .order("captured_at_ms")
+        .limit(100000);
+      rows = data || [];
+    }
     const columns = ["team_cd","captured_at_ms","sog_knots","cog_degree","latitude","longitude","relative_signed_degree","relative_angle_degree","upwind_vmg_knots","vmc_knots"];
     const csv = [columns.join(","), ...rows.map((row) => columns.map((key) => JSON.stringify((row as Record<string, unknown>)[key] ?? "")).join(","))].join("\n");
     const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], {type: "text/csv;charset=utf-8"}));

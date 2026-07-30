@@ -7,6 +7,22 @@ services:
     restart: unless-stopped
     volumes:
       - sailfish_tokens:/app/data
+    depends_on:
+      - sailfish-archive-postgres
+
+  sailfish-archive-postgres:
+    image: postgres:16-alpine
+    container_name: sailfish_archive_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sailfish_archive
+      POSTGRES_PASSWORD: ${ARCHIVE_POSTGRES_PASSWORD}
+      POSTGRES_DB: sailfish_archive
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - sailfish_archive_data:/var/lib/postgresql/data
 
 volumes:
   sailfish_tokens:
+  sailfish_archive_data:

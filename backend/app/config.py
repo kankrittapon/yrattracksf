@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     batch_flush_seconds: float = 1.0
     batch_size: int = 500
 
+    archive_database_url: str = ""
+    raw_runtime_clear_after_hours: int = 24
+    archive_after_days: int = 7
+    archive_scheduler_interval_seconds: int = 3600
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def parse_origins(cls, value: object) -> object:

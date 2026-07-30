@@ -86,6 +86,34 @@ class Repository:
         )
         response.raise_for_status()
 
+    async def update_where(
+        self,
+        table: str,
+        values: dict[str, Any],
+        params: dict[str, str],
+    ) -> None:
+        """Like update(), but params are PostgREST filter expressions as-is
+        (e.g. {"id": "in.(1,2,3)"}) instead of always being eq-wrapped."""
+        if not self.enabled or not values:
+            return
+        response = await self.http.patch(
+            f"{self.settings.supabase_url.rstrip('/')}/rest/v1/{table}",
+            params=params,
+            headers=self._headers("return=minimal"),
+            json=values,
+        )
+        response.raise_for_status()
+
+    async def delete_where(self, table: str, params: dict[str, str]) -> None:
+        if not self.enabled:
+            return
+        response = await self.http.delete(
+            f"{self.settings.supabase_url.rstrip('/')}/rest/v1/{table}",
+            params=params,
+            headers=self._headers("return=minimal"),
+        )
+        response.raise_for_status()
+
     async def store_race_event_once(
         self,
         race_cd: str,

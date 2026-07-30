@@ -12,6 +12,7 @@ export interface Race {
   start_at: string | null;
   end_at: string | null;
   history_imported_at: string | null;
+  archived_at: string | null;
   collection_enabled: boolean;
   updated_at: string;
   match?: {name: string} | null;
